@@ -253,7 +253,7 @@ test('App.js stays a thin wrapper and cannot substitute static runtime fixtures'
 
 test('admin account controls use the central API and never Firebase Auth or Functions', () => {
   const service = fs.readFileSync(new URL('../AdminUserService.js', import.meta.url), 'utf8');
-  assert.match(service,/api\('/users'/);
+  assert.match(service, /api\('\/users'/);
   assert.match(service,/api\('/users\/'+encodeURIComponent\(uid\)/);
   assert.doesNotMatch(service,/firebase\/auth/);
   assert.doesNotMatch(service,/httpsCallable|callable\(/);
