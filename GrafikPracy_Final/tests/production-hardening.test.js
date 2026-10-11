@@ -263,7 +263,7 @@ test('admin account controls use the central API and never Firebase Auth or Func
 test('admin role switching clears incompatible employee assignment in the UI', async () => {
   const panel = fs.readFileSync(new URL('../AdminUsersPanel.js', import.meta.url), 'utf8');
   assert.match(panel, /role==='employee'\?f\.personKey:''/);
-  assert.match(panel, /u\.role==='employee'\?\(u\.personKey\|\|'\'\)':''/);
+  assert.ok(panel.includes("personKey:u.role==='employee'?(u.personKey||''):''"));
   assert.match(panel, /DEZAKTYWUJ/);
 });
 
