@@ -721,9 +721,15 @@ export default function App() {
     if (!CENTRAL_API_ENABLED || !db || (!cloudUser && !guestMode)) return;
     warehouseGeoCloudReadyRef.current = false;
     const unsub = onSnapshot(doc(db,'warehouseZones','main'), snap => {
-      const data = snap.exists() ? (snap.data() || {}) : {};
-      warehouseGeoCloudApplyingRef.current = true;
-      setWarehouseGeo(data.warehouseGeo && typeof data.warehouseGeo === 'object' ? data.warehouseGeo : {});
+      if (snap.exists()) {
+        const data = snap.data() || {};
+        warehouseGeoCloudApplyingRef.current = true;
+        setWarehouseGeo(data.warehouseGeo && typeof data.warehouseGeo === 'object' ? data.warehouseGeo : {});
+      } else {
+        // Brak centralnego dokumentu: zachowaj istniejące strefy z urządzenia,
+        // aby można je było przenieść do wspólnej konfiguracji zamiast skasować.
+        setWarehouseGeo(previous => ({...previous}));
+      }
       warehouseGeoCloudReadyRef.current = true;
     }, err => {
       warehouseGeoCloudReadyRef.current = false;
