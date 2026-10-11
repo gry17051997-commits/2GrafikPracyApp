@@ -15,7 +15,7 @@ const pool=new Pool({
 });
 const PORT=Number(process.env.PORT||8787);
 const SESSION_DAYS=30;
-const STORE_COLLECTIONS=new Set(['chatMessages','proposals','schedules','settings','whatsappReports','audit']);
+const STORE_COLLECTIONS=new Set(['chatMessages','proposals','schedules','settings','warehouseZones','whatsappReports','audit']);
 
 const hashToken=v=>crypto.createHash('sha256').update(String(v)).digest('hex');
 const hashPassword=password=>{
@@ -59,6 +59,7 @@ function canStoreRead(name,user,payload={}){
 }
 function canStoreWrite(name,user,payload={},existing=null){
   if(name==='audit')return false;
+  if(name==='warehouseZones')return user.role==='admin'||user.role==='locator';
   if(name==='settings'||name==='schedules')return user.role==='admin';
   if(name==='proposals')return user.role==='admin'||(!existing&&payload.fromUid===user.id);
   if(name==='chatMessages')return user.role==='admin'||(!existing&&payload.uid===user.id);
