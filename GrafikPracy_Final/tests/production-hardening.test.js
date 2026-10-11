@@ -296,7 +296,31 @@ test('central document store rejects arbitrary collection names', () => {
   assert.match(server, /!STORE_COLLECTIONS\.has\(name\)/);
 });
 
+test('live GPS map keeps its WebView mounted and updates map data without reloading HTML', async () => {
+  const fs = await import('node:fs/promises');
+  const dashboard = await fs.readFile(new URL('../LiveLocationDashboard.js', import.meta.url), 'utf8');
+  assert.match(dashboard, /key="gps-live-map"/);
+  assert.match(dashboard, /source=\{\{html:buildLiveMapHtml\(null,\[\],true\)/);
+  assert.match(dashboard, /injectJavaScript\('window\.updateMapData\('/);
+  assert.match(dashboard, /window\.updateMapData=function\(json\)/);
+  assert.doesNotMatch(dashboard, /key=\{String\(location\.id\|\|location\.registration\)\+'_ '\+/);
+});
+
 test('GPS uploads have a finite timeout and always release the timeout timer', () => {
+  const source = fs.readFileSync(new URL('../apiClient.js', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function apiPostGps(');
+  const end = source.indexOf('\n}', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /new AbortController\(\)/);
+  assert.match(block, /setTimeout\(/);
+  assert.match(block, /12000/);
+  assert.match(block, /controller\.abort\(\)/);
+  assert.match(block, /Promise\.race\(\[request,timeout\]\)/);
+  assert.match(block, /clearTimeout\(timeoutId\)/);
+  assert.match(block, /GPS_API_TIMEOUT/);
+});
+
   const source = fs.readFileSync(new URL('../apiClient.js', import.meta.url), 'utf8');
   const start = source.indexOf('export async function apiPostGps(');
   const end = source.indexOf('\n}', start);
