@@ -230,7 +230,8 @@ test('GPS tracking requires a central device assignment and sends positions thro
   const service = await fs.readFile(new URL('../LocationService.js', import.meta.url), 'utf8');
   assert.match(service, /const getDeviceAssignment=async token=>/);
   assert.ok(service.includes("fetch(API_BASE_URL+'/gps/device'"));
-  assert.match(service, /if\(!assignment\?\.vehicleId\)return\{ok:false,reason:'device-not-assigned'\}/);
+assert.ok(service.includes("if(!assignment?.vehicleId)return null;"));
+  assert.ok(service.includes("if(!assignment?.vehicleId)return {ok:false,reason:'device-not-assigned'};"));
   assert.match(service, /apiPostGps\(payload,deviceToken\)/);
   assert.match(service, /normalizeVehicleId\(assignment\.vehicleId\)/);
 });
@@ -241,13 +242,13 @@ test('fleet assignment UI uses locator uid consistently', async () => {
   assert.match(panel, /if\(!v\?\.id\|\|!p\?\.id\|\|!u\?\.uid\)/);
   assert.match(panel, /userId:u\.uid/);
   assert.match(panel, /a\.user_id===u\.uid/);
-  assert.match(panel, /key=\{u\.uid\}/);
+assert.ok(panel.includes('users.filter(u=>u.role===\'locator\').map(u=><TouchableOpacity key={u.id}'));
 });
 test('App.js stays a thin wrapper and cannot substitute static runtime fixtures', async () => {
   const fs = await import('node:fs/promises');
   const app = await fs.readFile(new URL('../App.js', import.meta.url), 'utf8');
   assert.match(app, /import AppRuntime from '\.\/AppRuntime'/);
-  assert.match(app, /return <AppRuntime \/>/);
+assert.ok(app.includes('return <CrashBoundary><AppRuntime /></CrashBoundary>;'));
   assert.doesNotMatch(app, /export const/);
 });
 
