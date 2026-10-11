@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import useSecondTicker from './hooks/useSecondTicker';
 import {View, Text, StyleSheet, ScrollView, Platform, Linking, TouchableOpacity} from 'react-native';
 import {apiGetGps} from './apiClient';
@@ -20,11 +20,15 @@ const serverMillis=ts=>{if(typeof ts?.toMillis==='function')return ts.toMillis()
 const idFor=v=>String(v||'').trim().toUpperCase().replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ]+/gi,'_').slice(0,40);
 const reverseGeocode=async loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;try{const res=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+encodeURIComponent(lat)+'&longitude='+encodeURIComponent(lon)+'&localityLanguage=pl',{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),locality=d.city||d.locality||d.principalSubdivision||'',road=d.localityInfo?.informative?.find(x=>/street|road|ulica|droga/i.test(x.description||''))?.name||'';const address=[locality,road].filter(Boolean).join(', ');if(address)return address;}}catch{}try{const res=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&accept-language=pl&lat='+encodeURIComponent(lat)+'&lon='+encodeURIComponent(lon),{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),a=d?.address||{},locality=a.city||a.town||a.village||a.municipality||a.suburb||a.county||'',road=a.road||a.pedestrian||a.residential||a.highway||'',house=a.house_number||'',ref=a.ref||'';return [locality,ref&&ref!==road?ref:'',road+(house?' '+house:'')].filter(Boolean).join(', ')||d.name||null;}}catch{}return null;};
 const mapUrl=loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;const d=0.006;return 'https://www.openstreetmap.org/export/embed.html?bbox='+(lon-d)+'%2C'+(lat-d)+'%2C'+(lon+d)+'%2C'+(lat+d)+'&layer=mapnik&marker='+lat+'%2C'+lon;};
+const miniMapHtml='<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body,iframe{height:100%;width:100%;margin:0;padding:0;border:0;background:#0d121b;display:block;overflow:hidden}</style></head><body><iframe id="gpsMapFrame" title="Mapa aktualnej lokalizacji" src="https://www.openstreetmap.org/export/embed.html?bbox=16.5%2C50.7%2C17.1%2C51.1&layer=mapnik"></iframe><script>window.setGpsPoint=function(lat,lon){try{var d=0.006;document.getElementById('gpsMapFrame').src='https://www.openstreetmap.org/export/embed.html?bbox='+(lon-d)+'%2C'+(lat-d)+'%2C'+(lon+d)+'%2C'+(lat+d)+'&layer=mapnik&marker='+lat+'%2C'+lon;}catch(e){}};</script></body></html>';
 
 export default function NowDashboard({weeks,rotation,warehouse,times,personColors,weekConfigs,cloudUser,vehicleRegistration}) {
  const [location,setLocation]=useState(null);
  const [locationError,setLocationError]=useState('');
  const [locationAddress,setLocationAddress]=useState('Ustalanie adresu…');
+ const miniMapRef=useRef(null),miniMapLoaded=useRef(false);
+ const syncMiniMap=()=>{const lat=Number(location?.latitude),lon=Number(location?.longitude);if(!miniMapLoaded.current||!miniMapRef.current||!Number.isFinite(lat)||!Number.isFinite(lon))return;miniMapRef.current.injectJavaScript('window.setGpsPoint('+lat+','+lon+'); true;');};
+ useEffect(()=>{syncMiniMap();},[location?.latitude,location?.longitude]);
  useSecondTicker(1000);
  const gpsRefreshTick=useSecondTicker(10000);
  useEffect(()=>{
@@ -119,7 +123,7 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
    <View style={S.locationCard}>
      <Text style={S.locationStatus}>{location?(locationError?'🟠 '+locationError:(Number(location.speed||0)*3.6>5?'🚚 AUTO W RUCHU':'🅿️ AUTO NA POSTOJU')):'🔴 BRAK LOKALIZACJI'}</Text>
      {location&&<><Text style={S.locationCoords}>{locationAddress}</Text><Text style={S.locationMeta}>{Number(location.latitude).toFixed(5)}, {Number(location.longitude).toFixed(5)} · Aktualizacja {new Date(serverMillis(location.updatedAt)).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})} · ±{Math.round(Number(location.accuracy||0))} m</Text></>}
-     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="mini-mapa-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} src={mapUrl(location)}/>:<WebView key={Math.round(Number(location.latitude)*10000)+'_'+Math.round(Number(location.longitude)*10000)} originWhitelist={['*']} mixedContentMode="compatibility" source={{uri:mapUrl(location)}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} androidLayerType="software" style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
+     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="mini-mapa-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} src={mapUrl(location)}/>:<WebView ref={miniMapRef} key="gps-mini-map" originWhitelist={['*']} mixedContentMode="compatibility" source={{html:miniMapHtml,baseUrl:'https://www.openstreetmap.org/'}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} androidLayerType="software" onLoadEnd={()=>{miniMapLoaded.current=true;syncMiniMap();}} onError={()=>{miniMapLoaded.current=false;}} style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
      {location&&<TouchableOpacity accessibilityRole="button" accessibilityLabel="Otwórz aktualną pozycję na mapie" onPress={openMap} style={S.openMapButton}><Text style={S.openMapButtonText}>🗺️ OTWÓRZ MAPĘ NA ŻYWO</Text></TouchableOpacity>}
    </View>
  </ScrollView>;
