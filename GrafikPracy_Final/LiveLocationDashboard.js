@@ -91,7 +91,7 @@ const buildGpsEvents=rows=>{
   const state=sample.moving,prev=events[events.length-1];
   const gap=prev?sample.t-prev.endAt:Infinity;
   const continuous=prev&&gap>=0&&gap<=15*60*1000;
-  const sameStop=prev&&!state&&!prev.moving&&distanceMeters(prev.point,sample.point)<=150;
+  const sameStop=prev&&!state&&!prev.moving&&gap>=0&&gap<=60*60*1000&&distanceMeters(prev.point,sample.point)<=150;
   if(prev&&prev.moving===state&&(continuous||sameStop)){
    prev.endAt=sample.t;prev.duration=prev.endAt-prev.startAt;prev.points.push(sample.point);prev.point=sample.point;
    prev.speedTotal+=sample.speed;prev.speedCount++;prev.averageSpeed=Math.round(prev.speedTotal/prev.speedCount);
