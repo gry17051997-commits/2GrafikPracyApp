@@ -235,6 +235,9 @@ export default function App() {
   const reportStatusRef = useRef(reportStatus);
   const handledReportNotificationRef = useRef(null);
   const [warehouseGeo,setWarehouseGeo] = useState({});
+  const warehouseGeoCloudReadyRef = useRef(false);
+  const warehouseGeoCloudApplyingRef = useRef(false);
+  const warehouseGeoCloudSaveTimerRef = useRef(null);
   const [locationTracking,setLocationTracking] = useState(false);
   const [locationDiagnostics,setLocationDiagnostics] = useState({});
   const [locationBusy,setLocationBusy] = useState(false);
@@ -711,6 +714,49 @@ export default function App() {
     }, err => setCloudError('Brak dostępu do ustawień grafiku. Kod: ' + (err?.code || 'nieznany')));
     return unsub;
   },[cloudUser,guestMode]);
+
+  // Wspólne strefy GPS są przechowywane niezależnie od ustawień grafiku,
+  // aby lokalizator mógł je kalibrować, a wszystkie konta odczytywać tę samą konfigurację.
+  useEffect(() => {
+    if (!CENTRAL_API_ENABLED || !db || (!cloudUser && !guestMode)) return;
+    warehouseGeoCloudReadyRef.current = false;
+    const unsub = onSnapshot(doc(db,'warehouseZones','main'), snap => {
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      warehouseGeoCloudApplyingRef.current = true;
+      setWarehouseGeo(data.warehouseGeo && typeof data.warehouseGeo === 'object' ? data.warehouseGeo : {});
+      warehouseGeoCloudReadyRef.current = true;
+    }, err => {
+      warehouseGeoCloudReadyRef.current = false;
+      setCloudError('Nie udało się pobrać wspólnych stref GPS. Kod: ' + (err?.code || 'unknown'));
+    });
+    return () => unsub();
+  },[cloudUser?.uid,cloudUser?.role,guestMode]);
+
+  useEffect(() => {
+    if (!CENTRAL_API_ENABLED || !db || !ready || !warehouseGeoCloudReadyRef.current
+      || !cloudUser || !['admin','locator'].includes(cloudRole)) return;
+    if (warehouseGeoCloudApplyingRef.current) {
+      warehouseGeoCloudApplyingRef.current = false;
+      return;
+    }
+    if (warehouseGeoCloudSaveTimerRef.current) clearTimeout(warehouseGeoCloudSaveTimerRef.current);
+    const snapshot = JSON.stringify(warehouseGeo || {});
+    warehouseGeoCloudSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await setDoc(doc(db,'warehouseZones','main'), {
+          warehouseGeo: JSON.parse(snapshot),
+          updatedAt: serverTimestamp(),
+          updatedBy: cloudUser.uid
+        }, {merge:true});
+      } catch (error) {
+        console.error('Nie udało się zapisać wspólnych stref GPS:', error);
+        setCloudError('Nie udało się zsynchronizować stref GPS. Kod: ' + (error?.code || 'unknown'));
+      }
+    }, 350);
+    return () => {
+      if (warehouseGeoCloudSaveTimerRef.current) clearTimeout(warehouseGeoCloudSaveTimerRef.current);
+    };
+  },[warehouseGeo,ready,cloudUser?.uid,cloudRole]);
 
   useEffect(() => {
     if (!ready || !cloudSettingsReady || !settingsHydratedRef.current) return;
