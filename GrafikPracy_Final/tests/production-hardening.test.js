@@ -229,7 +229,7 @@ test('GPS tracking requires a central device assignment and sends positions thro
   const fs = await import('node:fs/promises');
   const service = await fs.readFile(new URL('../LocationService.js', import.meta.url), 'utf8');
   assert.match(service, /const getDeviceAssignment=async token=>/);
-  assert.match(service, /fetch\(API_BASE_URL+'\\/gps\\/device'/);
+  assert.ok(service.includes("fetch(API_BASE_URL+'/gps/device'"));
   assert.match(service, /if\(!assignment\?\.vehicleId\)return\{ok:false,reason:'device-not-assigned'\}/);
   assert.match(service, /apiPostGps\(payload,deviceToken\)/);
   assert.match(service, /normalizeVehicleId\(assignment\.vehicleId\)/);
