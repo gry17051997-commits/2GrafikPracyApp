@@ -13,21 +13,23 @@ const mapUrl=loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if
 const buildLiveMapHtml=(current,rows)=>{
  const valid=(rows||[]).filter(p=>Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&serverMillis(p.updatedAt)>0).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
  const segments=[];let segment=[],previous=null;
+ const flush=()=>{if(segment.length>1)segments.push(segment);segment=[];};
  for(const p of valid){
    const point={latitude:Number(p.latitude),longitude:Number(p.longitude),speed:Number(p.speed||0),time:serverMillis(p.updatedAt)};
    const moved=previous?distanceMeters(previous,point):0;
-   const continuous=previous&&point.time>previous.time&&point.time-previous.time<=5*60*1000;
-   const isMoving=point.speed*3.6>=5||moved>=30;
-   if(!continuous){if(segment.length>1)segments.push(segment);segment=[];}
-   if(continuous&&isMoving&&moved>=15){
+   const gap=previous?point.time-previous.time:0;
+   const continuous=previous&&gap>0&&gap<=15*60*1000;
+   const isMoving=point.speed*3.6>=5||moved>=25;
+   if(!continuous)flush();
+   if(continuous&&isMoving){
      if(!segment.length)segment.push([previous.latitude,previous.longitude]);
-     segment.push([point.latitude,point.longitude]);
-   }else{if(segment.length>1)segments.push(segment);segment=[];}
+     if(moved>=8)segment.push([point.latitude,point.longitude]);
+   }else flush();
    previous=point;
  }
- if(segment.length>1)segments.push(segment);
+ flush();
  const payload=JSON.stringify({current:current?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Number(current.speed||0),time:serverMillis(current.updatedAt)}:null,segments}).replace(/</g,'\\u003c');
- return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;width:100%;margin:0;background:#101722}.leaflet-control-attribution{font-size:9px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const d='+payload+';const map=L.map("map",{zoomControl:true}).setView(d.current?[d.current.lat,d.current.lon]:[51.0,16.8],d.current?14:7);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);let bounds=[];d.segments.forEach(points=>{const line=L.polyline(points,{color:"#2d7cff",weight:5,opacity:.9}).addTo(map);bounds.push(...points);});if(d.current){const marker=L.circleMarker([d.current.lat,d.current.lon],{radius:9,color:"#fff",weight:3,fillColor:d.current.speed*3.6>=8?"#22c55e":"#f59e0b",fillOpacity:1}).addTo(map);marker.bindPopup("Aktualna pozycja<br>Prędkość: "+Math.round(d.current.speed*3.6)+" km/h<br>Aktualizacja: "+new Date(d.current.time).toLocaleTimeString("pl-PL"));bounds.push([d.current.lat,d.current.lon]);}if(bounds.length>1)map.fitBounds(bounds,{padding:[20,20],maxZoom:16});else if(bounds.length===1)map.setView(bounds[0],15);</script></body></html>';
+ return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;width:100%;margin:0;background:#101722}.leaflet-control-attribution{font-size:9px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const d='+payload+';const map=L.map("map",{zoomControl:true}).setView(d.current?[d.current.lat,d.current.lon]:[51.0,16.8],d.current?14:7);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);let bounds=[];d.segments.forEach(points=>{const line=L.polyline(points,{color:"#2d7cff",weight:5,opacity:.9}).addTo(map);bounds.push(...points);});if(d.current){const marker=L.circleMarker([d.current.lat,d.current.lon],{radius:9,color:"#fff",weight:3,fillColor:d.current.speed*3.6>=5?"#22c55e":"#f59e0b",fillOpacity:1}).addTo(map);marker.bindPopup("Aktualna pozycja<br>Prędkość: "+Math.round(d.current.speed*3.6)+" km/h<br>Aktualizacja: "+new Date(d.current.time).toLocaleTimeString("pl-PL"));bounds.push([d.current.lat,d.current.lon]);}if(bounds.length>1)map.fitBounds(bounds,{padding:[20,20],maxZoom:16});else if(bounds.length===1)map.setView(bounds[0],15);</script></body></html>';
 };
 
 export default function LiveLocationDashboard({vehicleRegistration='',warehouseGeo={},reportHistory=[],onApplySuggestion}){
@@ -72,7 +74,7 @@ const buildGpsEvents=rows=>{
  for(const point of points){
   const t=serverMillis(point.updatedAt),gap=previous?t-serverMillis(previous.updatedAt):0,moved=previous?distanceMeters(previous,point):0;
   const gpsSpeed=Math.max(0,Number(point.speed||0)*3.6);
-  const derivedSpeed=previous&&gap>0&&gap<=180000&&moved>=30?moved/gap*3600:0;
+  const derivedSpeed=previous&&gap>0&&gap<=180000&&moved>=25?moved/gap*3600:0;
   const speed=Math.max(gpsSpeed,derivedSpeed);
   let moving=speed>=8||moved>=80;
   if(speed>5&&speed<8&&moved<80)moving=lastStable;
@@ -87,8 +89,10 @@ const buildGpsEvents=rows=>{
  const events=[];
  for(const sample of classified){
   const state=sample.moving,prev=events[events.length-1];
-  const continuous=prev&&sample.t-prev.endAt<=5*60*1000&&sample.t>=prev.endAt;
-  if(prev&&prev.moving===state&&continuous){
+  const gap=prev?sample.t-prev.endAt:Infinity;
+  const continuous=prev&&gap>=0&&gap<=15*60*1000;
+  const sameStop=prev&&!state&&!prev.moving&&distanceMeters(prev.point,sample.point)<=150;
+  if(prev&&prev.moving===state&&(continuous||sameStop)){
    prev.endAt=sample.t;prev.duration=prev.endAt-prev.startAt;prev.points.push(sample.point);prev.point=sample.point;
    prev.speedTotal+=sample.speed;prev.speedCount++;prev.averageSpeed=Math.round(prev.speedTotal/prev.speedCount);
   }else{
