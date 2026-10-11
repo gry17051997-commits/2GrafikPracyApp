@@ -39,7 +39,8 @@ const buildLiveMapHtml=(current,rows)=>{
 };
 
 export default function NowDashboard({weeks,rotation,warehouse,times,personColors,weekConfigs,cloudUser,vehicleRegistration}) {
- const [location,setLocation]=useState(null);\n const [locationHistory,setLocationHistory]=useState([]);
+ const [location,setLocation]=useState(null);
+ const [locationHistory,setLocationHistory]=useState([]);
  const [locationError,setLocationError]=useState('');
  const [locationAddress,setLocationAddress]=useState('Ustalanie adresu…');
  useSecondTicker(1000);
