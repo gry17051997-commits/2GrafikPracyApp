@@ -296,6 +296,16 @@ test('central document store rejects arbitrary collection names', () => {
   assert.match(server, /!STORE_COLLECTIONS\.has\(name\)/);
 });
 
+test('dashboard GPS mini map keeps a stable WebView and updates the OSM embed without remounting', async () => {
+  const fs = await import('node:fs/promises');
+  const dashboard = await fs.readFile(new URL('../NowDashboard.js', import.meta.url), 'utf8');
+  assert.match(dashboard, /const miniMapHtml=/);
+  assert.match(dashboard, /key="gps-mini-map"/);
+  assert.match(dashboard, /window\.setGpsPoint=function\(lat,lon\)/);
+  assert.match(dashboard, /injectJavaScript\('window\.setGpsPoint\('/);
+  assert.doesNotMatch(dashboard, /key=\{Math\.round\(Number\(location\.latitude\)\*10000\)/);
+});
+
 test('live GPS map keeps its WebView mounted and updates map data without reloading HTML', async () => {
   const fs = await import('node:fs/promises');
   const dashboard = await fs.readFile(new URL('../LiveLocationDashboard.js', import.meta.url), 'utf8');
