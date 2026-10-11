@@ -9,6 +9,7 @@ export const LOCATION_CONFIG_KEY='grafik-pracy-location-config-v2';
 export const LOCATION_CURRENT_KEY='grafik-pracy-location-current-v2';
 export const LOCATION_DEVICE_TOKEN_KEY='grafik-pracy-location-device-token-v1';
 export const LOCATION_DIAGNOSTICS_KEY='grafik-pracy-location-diagnostics-v1';
+const LOCATION_OPTIONS_VERSION=3;
 
 export const normalizeVehicleId=value=>String(value||'').trim().toUpperCase().replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ]+/gi,'_').slice(0,40)||'SLUZBOWY';
 
@@ -148,8 +149,14 @@ export async function startVehicleLocationTracking({vehicleId,registration}={}){
   const bg=await Location.requestBackgroundPermissionsAsync();
   if(bg.status!=='granted')return {ok:false,reason:'background-permission'};
   const old=await getConfig();
-  await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...old,enabled:true,vehicleId:normalizeVehicleId(assignment.vehicleId),registration:assignment.registration||registration||''}));
-  if(!(await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)))await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME,LOCATION_OPTIONS);
+  await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...old,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),registration:assignment.registration||registration||''}));
+  const alreadyRunning=await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+  if(alreadyRunning && old.optionsVersion!==LOCATION_OPTIONS_VERSION){
+    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+  }
+  if(!alreadyRunning || old.optionsVersion!==LOCATION_OPTIONS_VERSION){
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME,LOCATION_OPTIONS);
+  }
   try{await saveLocation(await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.Highest,mayShowUserSettingsDialog:true}));}catch(e){console.log('LOCATION_INITIAL_FIX_ERROR',e);}
   return {ok:true,vehicleId:assignment.vehicleId,registration:assignment.registration||''};
 }
@@ -174,10 +181,21 @@ export async function ensureVehicleLocationTracking(){
   const fg=await Location.getForegroundPermissionsAsync(),bg=await Location.getBackgroundPermissionsAsync();
   if(fg.status!=='granted'||bg.status!=='granted')return {ok:false,reason:'permission'};
   if(!(await Location.hasServicesEnabledAsync()))return {ok:false,reason:'location-services-disabled'};
-  const running=await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
-  if(!running)await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME,LOCATION_OPTIONS);
+  let running=await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+  let restarted=false;
+  if(running && Number(cfg.optionsVersion||0)!==LOCATION_OPTIONS_VERSION){
+    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+    running=false;
+  }
+  if(!running){
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME,LOCATION_OPTIONS);
+    restarted=true;
+  }
+  if(!running || Number(cfg.optionsVersion||0)!==LOCATION_OPTIONS_VERSION){
+    await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...cfg,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),registration:assignment.registration||cfg.registration||''}));
+  }
   try{await saveLocation(await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High}));}catch(e){console.log('LOCATION_REFRESH_ERROR',e);}
-  return {ok:true,restarted:!running,vehicleId:assignment.vehicleId,registration:assignment.registration||''};
+  return {ok:true,restarted,vehicleId:assignment.vehicleId,registration:assignment.registration||''};
 }
 
 export async function getVehicleLocationConfig(){
