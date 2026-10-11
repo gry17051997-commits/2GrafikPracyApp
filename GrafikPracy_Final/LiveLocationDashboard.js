@@ -49,7 +49,8 @@ export default function LiveLocationDashboard({vehicleRegistration='',warehouseG
    const lastStatus=String(last?.status||'');
    const lastCreated=serverMillis(last?.createdAt);
    const sameStatus=!!candidate&&lastStatus===candidate.status;
-   const lastText=String(last?.text||'').toUpperCase();\n   const sameStop=!!candidate?.warehouse&&(String(last?.warehouse||'').split('->')[0]===candidate.warehouse||lastText.includes(candidate.warehouse.toUpperCase()));
+   const lastText=String(last?.text||'').toUpperCase();
+   const sameStop=!!candidate?.warehouse&&(String(last?.warehouse||'').split('->')[0]===candidate.warehouse||lastText.includes(candidate.warehouse.toUpperCase()));
    const recentlyReported=lastCreated>0&&Date.now()-lastCreated<3*60*1000;
    if(candidate&&!(sameStatus&&(!candidate.warehouse||sameStop||recentlyReported)))suggestion=candidate;
  }
