@@ -1,7 +1,7 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import useSecondTicker from './hooks/useSecondTicker';
 import {View, Text, StyleSheet, ScrollView, Platform, Linking, TouchableOpacity} from 'react-native';
-import {apiGetGps} from './apiClient';
+import {api,apiGetGps} from './apiClient';
 import {WebView} from 'react-native-webview';
 
 const PEOPLE={P:'Paweł',M:'Mateusz',L:'Łukasz'};
@@ -20,9 +20,26 @@ const serverMillis=ts=>{if(typeof ts?.toMillis==='function')return ts.toMillis()
 const idFor=v=>String(v||'').trim().toUpperCase().replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ]+/gi,'_').slice(0,40);
 const reverseGeocode=async loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;try{const res=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+encodeURIComponent(lat)+'&longitude='+encodeURIComponent(lon)+'&localityLanguage=pl',{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),locality=d.city||d.locality||d.principalSubdivision||'',road=d.localityInfo?.informative?.find(x=>/street|road|ulica|droga/i.test(x.description||''))?.name||'';const address=[locality,road].filter(Boolean).join(', ');if(address)return address;}}catch{}try{const res=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&accept-language=pl&lat='+encodeURIComponent(lat)+'&lon='+encodeURIComponent(lon),{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),a=d?.address||{},locality=a.city||a.town||a.village||a.municipality||a.suburb||a.county||'',road=a.road||a.pedestrian||a.residential||a.highway||'',house=a.house_number||'',ref=a.ref||'';return [locality,ref&&ref!==road?ref:'',road+(house?' '+house:'')].filter(Boolean).join(', ')||d.name||null;}}catch{}return null;};
 const mapUrl=loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;const d=0.006;return 'https://www.openstreetmap.org/export/embed.html?bbox='+(lon-d)+'%2C'+(lat-d)+'%2C'+(lon+d)+'%2C'+(lat+d)+'&layer=mapnik&marker='+lat+'%2C'+lon;};
+const gpsDistanceMeters=(a,b)=>{if(!a||!b)return Infinity;const R=6371000,p1=Number(a.latitude)*Math.PI/180,p2=Number(b.latitude)*Math.PI/180,dp=(Number(b.latitude)-Number(a.latitude))*Math.PI/180,dl=(Number(b.longitude)-Number(a.longitude))*Math.PI/180,x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));};
+const buildLiveMapHtml=(current,rows)=>{
+ const points=(rows||[]).filter(p=>Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&serverMillis(p.updatedAt)>0).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
+ const segments=[];let segment=[],previous=null;
+ for(const row of points){
+  const point={latitude:Number(row.latitude),longitude:Number(row.longitude),speed:Math.max(0,Number(row.speed)||0),time:serverMillis(row.updatedAt)};
+  const moved=previous?gpsDistanceMeters(previous,point):0,gap=previous?point.time-previous.time:0;
+  const continuous=!!previous&&gap>0&&gap<=5*60*1000;
+  const moving=point.speed*3.6>5||(continuous&&moved>=80);
+  if(!continuous||!moving||moved<15){if(segment.length>1)segments.push(segment);segment=[];}
+  if(continuous&&moving&&moved>=15){if(!segment.length)segment.push([previous.latitude,previous.longitude]);segment.push([point.latitude,point.longitude]);}
+  previous=point;
+ }
+ if(segment.length>1)segments.push(segment);
+ const payload=JSON.stringify({current:current?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Math.max(0,Number(current.speed)||0),time:serverMillis(current.updatedAt)}:null,segments}).replace(/</g,'\\u003c');
+ return '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>html,body,#map{height:100%;width:100%;margin:0;background:#101722}.leaflet-control-attribution{font-size:9px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const d='+payload+';const map=L.map("map",{zoomControl:true}).setView(d.current?[d.current.lat,d.current.lon]:[51.0,16.8],d.current?14:7);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);let bounds=[];d.segments.forEach(points=>{L.polyline(points,{color:"#2d7cff",weight:5,opacity:.9}).addTo(map);bounds.push(...points);});if(d.current){L.circleMarker([d.current.lat,d.current.lon],{radius:9,color:"#fff",weight:3,fillColor:d.current.speed*3.6>5?"#22c55e":"#f59e0b",fillOpacity:1}).addTo(map).bindPopup("Aktualna pozycja<br>Prędkość: "+Math.round(d.current.speed*3.6)+" km/h<br>Aktualizacja: "+new Date(d.current.time).toLocaleTimeString("pl-PL"));bounds.push([d.current.lat,d.current.lon]);}if(bounds.length>1)map.fitBounds(bounds,{padding:[20,20],maxZoom:16});else if(bounds.length===1)map.setView(bounds[0],15);</script></body></html>';
+};
 
 export default function NowDashboard({weeks,rotation,warehouse,times,personColors,weekConfigs,cloudUser,vehicleRegistration}) {
- const [location,setLocation]=useState(null);
+ const [location,setLocation]=useState(null);\n const [locationHistory,setLocationHistory]=useState([]);
  const [locationError,setLocationError]=useState('');
  const [locationAddress,setLocationAddress]=useState('Ustalanie adresu…');
  useSecondTicker(1000);
@@ -37,6 +54,10 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
          if(!selected){setLocation(null);setLocationError('Brak przypisanego auta lub brak odebranej pozycji GPS.');return;}
          const point={...selected,updatedAt:selected.observed_at};
          setLocation(point);
+         if(point.id){
+           try{const h=await api('/gps/'+encodeURIComponent(point.id)+'/history');if(!cancelled)setLocationHistory((h.history||[]).map(x=>({...x,updatedAt:x.observed_at})).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt)));}
+           catch{ /* Zachowujemy ostatnią poprawnie pobraną trasę przy błędzie API. */ }
+         }
          const observed=serverMillis(point.updatedAt);
          setLocationError(observed>0 && Date.now()-observed>180000?'Lokalizacja nieaktualna':'');
          return;
@@ -48,6 +69,8 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
        if(!selected){setLocationError('API nie zwróciło lokalizacji. Zachowuję ostatnią znaną pozycję.');return;}
        const point={...selected,updatedAt:selected.observed_at};
        setLocation(point);
+       try{const h=await api('/gps/'+encodeURIComponent(point.id)+'/history');if(!cancelled)setLocationHistory((h.history||[]).map(x=>({...x,updatedAt:x.observed_at})).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt)));}
+       catch{ /* Zachowujemy ostatnią poprawnie pobraną trasę przy błędzie API. */ }
        setLocationError(Date.now()-serverMillis(point.updatedAt)>180000?'Lokalizacja nieaktualna':'');
      }catch(e){if(!cancelled){setLocationError('Brak połączenia z API. Zachowuję ostatnią znaną pozycję; sprawdź czas jej aktualizacji.');}}
    };
@@ -119,7 +142,8 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
    <View style={S.locationCard}>
      <Text style={S.locationStatus}>{location?(locationError?'🟠 '+locationError:(Number(location.speed||0)*3.6>5?'🚚 AUTO W RUCHU':'🅿️ AUTO NA POSTOJU')):'🔴 BRAK LOKALIZACJI'}</Text>
      {location&&<><Text style={S.locationCoords}>{locationAddress}</Text><Text style={S.locationMeta}>{Number(location.latitude).toFixed(5)}, {Number(location.longitude).toFixed(5)} · Aktualizacja {new Date(serverMillis(location.updatedAt)).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})} · ±{Math.round(Number(location.accuracy||0))} m</Text></>}
-     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="mini-mapa-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} src={mapUrl(location)}/>:<WebView key={Math.round(Number(location.latitude)*10000)+'_'+Math.round(Number(location.longitude)*10000)} originWhitelist={['https://www.openstreetmap.org']} source={{uri:mapUrl(location)}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
+     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="live-mapa-trasy-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} srcDoc={buildLiveMapHtml(location,locationHistory)}/>:<WebView key={String(location.id||location.registration)+'_'+serverMillis(location.updatedAt)+'_'+locationHistory.length} originWhitelist={['https://*','http://*']} source={{html:buildLiveMapHtml(location,locationHistory)}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
+     <Text style={S.locationMeta}>Niebieska linia pokazuje przejazdy między postojami. Pozycja i trasa odświeżają się co 10 sekund.</Text>
      {location&&<TouchableOpacity accessibilityRole="button" accessibilityLabel="Otwórz aktualną pozycję na mapie" onPress={openMap} style={S.openMapButton}><Text style={S.openMapButtonText}>🗺️ OTWÓRZ MAPĘ NA ŻYWO</Text></TouchableOpacity>}
    </View>
  </ScrollView>;
