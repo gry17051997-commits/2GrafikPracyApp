@@ -40,15 +40,15 @@ const getDeviceAssignment=async token=>{
 
 const LOCATION_OPTIONS={
   accuracy:Location.Accuracy.High,
-  timeInterval:15000,
-  distanceInterval:10,
-  deferredUpdatesInterval:15000,
+  timeInterval:10000,
+  distanceInterval:0,
+  deferredUpdatesInterval:0,
   deferredUpdatesDistance:0,
   pausesUpdatesAutomatically:false,
   showsBackgroundLocationIndicator:true,
   foregroundService:{
-    notificationTitle:'Grafik Pracy • lokalizacja auta',
-    notificationBody:'Udostępnianie lokalizacji służbowego telefonu jest aktywne.',
+    notificationTitle:'Grafik Pracy • GPS aktywny',
+    notificationBody:'Lokalizacja auta jest udostępniana również przy zablokowanym ekranie.',
     notificationColor:'#467ff1',
     killServiceOnDestroy:false
   }
@@ -71,11 +71,29 @@ async function saveLocationInternal(location){
     heading:Number.isFinite(c.heading)?Number(c.heading):null,
     observedAt:Number(location.timestamp||now)
   };
+  let result=null,lastError=null;
+  // Krótkie ponowienia chronią przed utratą pojedynczego pomiaru przy chwilowym
+  // zaniku sieci. Błąd API nigdy sam w sobie nie wyłącza usługi GPS.
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      result=await apiPostGps(payload,deviceToken);
+      lastError=null;
+      break;
+    }catch(error){
+      lastError=error;
+      if(attempt<2) await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));
+    }
+  }
+  if(!result){
+    const message=String(lastError?.message||lastError||'unknown');
+    await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now()});
+    console.log('LOCATION_API_WRITE_ERROR_AFTER_RETRIES',message);
+    return;
+  }
   try{
-    const result=await apiPostGps(payload,deviceToken);
     await patchDiagnostics({lastUploadAt:Date.now(),lastUploadError:null,lastUploadErrorAt:null});
     const assignedVehicleId=normalizeVehicleId(result.vehicleId||result.registration||cfg.vehicleId);
-    const local={...payload,vehicleId:assignedVehicleId,registration:result.registration||cfg.registration||'',receivedAt:now};
+    const local={...payload,vehicleId:assignedVehicleId,registration:result.registration||cfg.registration||'',receivedAt:Date.now()};
     let previous=null;try{const raw=await AsyncStorage.getItem(LOCATION_CURRENT_KEY);previous=raw?JSON.parse(raw):null;}catch{}
     const moved=previous?distanceMeters(previous,payload):Infinity;
     const historyAt=Number(previous?.historyAt||0);
@@ -85,7 +103,7 @@ async function saveLocationInternal(location){
   }catch(error){
     const message=String(error?.message||error||'unknown');
     await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now()});
-    console.log('LOCATION_API_WRITE_ERROR',message);
+    console.log('LOCATION_LOCAL_SAVE_ERROR',message);
   }
 }
 function saveLocation(location){const run=saveQueue.then(()=>saveLocationInternal(location));saveQueue=run.catch(()=>{});return run;}
@@ -145,7 +163,8 @@ export async function stopVehicleLocationTracking(){
 
 export async function ensureVehicleLocationTracking(){
   if(Platform.OS==='web'||!API_BASE_URL)return {ok:false,reason:'unsupported'};
-  if(AppState.currentState!=='active')return {ok:false,reason:'app-not-active'};
+  // Funkcja może być wywołana przy wznowieniu aplikacji. Nie zatrzymuj ani nie
+  // uznawaj działającego nadajnika za wyłączony tylko dlatego, że ekran był zablokowany.
   const cfg=await getConfig();
   if(cfg.enabled!==true)return {ok:false,reason:'disabled'};
   const token=await getLocationDeviceToken();
