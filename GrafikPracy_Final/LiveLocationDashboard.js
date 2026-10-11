@@ -74,20 +74,22 @@ const buildGpsEvents=rows=>{
   const gpsSpeed=Math.max(0,Number(point.speed||0)*3.6);
   const derivedSpeed=previous&&gap>0&&gap<=180000&&moved>=30?moved/gap*3600:0;
   const speed=Math.max(gpsSpeed,derivedSpeed);
-  let moving=speed>=8||moved>=80;
-  if(speed>5&&speed<8&&moved<80)moving=lastStable;
+  let moving=speed>5||(gap>0&&gap<=180000&&moved>=80);
+  if(speed>=4.5&&speed<=5.5&&moved<80)moving=lastStable;
   classified.push({point,t,moving,speed,moved,gap});
   if(classified.length>=3){
    const a=classified[classified.length-3],b=classified[classified.length-2],c=classified[classified.length-1];
    if(a.moving===c.moving&&b.moving!==a.moving&&b.gap<=180000&&c.gap<=180000)b.moving=a.moving;
   }
-  if(speed>=8||moved>=80)lastStable=true;else if(speed<=5&&moved<40)lastStable=false;
+  if(speed>5||(gap>0&&gap<=180000&&moved>=80))lastStable=true;else if(speed<=5&&moved<40)lastStable=false;
   previous=point;
  }
  const events=[];
  for(const sample of classified){
   const state=sample.moving,prev=events[events.length-1];
-  const continuous=prev&&sample.t-prev.endAt<=5*60*1000&&sample.t>=prev.endAt;
+  const gap=prev?sample.t-prev.endAt:Infinity;
+  const nearSameStop=!!prev&&!state&&!prev.moving&&distanceMeters(prev.point,sample.point)<=100;
+  const continuous=prev&&gap>=0&&(gap<=5*60*1000||(nearSameStop&&gap<=20*60*1000));
   if(prev&&prev.moving===state&&continuous){
    prev.endAt=sample.t;prev.duration=prev.endAt-prev.startAt;prev.points.push(sample.point);prev.point=sample.point;
    prev.speedTotal+=sample.speed;prev.speedCount++;prev.averageSpeed=Math.round(prev.speedTotal/prev.speedCount);
