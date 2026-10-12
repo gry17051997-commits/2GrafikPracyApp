@@ -40,8 +40,7 @@ const makeRateLimiter=(windowMs,max,message)=>rateLimit({
   standardHeaders:'draft-8',
   legacyHeaders:false,
   message:{error:'RATE_LIMITED',message},
-  // Use the Express-derived client IP, with trust proxy configured above.
-  keyGenerator:req=>req.ip
+  // express-rate-limit uses req.ip, respecting the trust proxy setting above.
 });
 const authLoginLimiter=makeRateLimiter(15*60*1000,12,'Too many login attempts. Try again later.');
 const authRegisterLimiter=makeRateLimiter(15*60*1000,5,'Too many registration attempts. Try again later.');
