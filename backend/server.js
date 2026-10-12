@@ -1,13 +1,58 @@
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import crypto from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import pg from 'pg';
 
 const {Pool}=pg;
 const app=express();
-app.use(cors());
+
+// Render terminates TLS in front of the Node process. Trust only its single proxy hop
+// so rate-limit client IPs use the forwarded address without trusting arbitrary chains.
+const isProduction=process.env.NODE_ENV==='production';
+app.set('trust proxy',isProduction?1:false);
+
+const allowedOrigins=new Set(
+  String(process.env.ALLOWED_ORIGINS||'')
+    .split(',')
+    .map(origin=>origin.trim())
+    .filter(Boolean)
+);
+app.use(cors({
+  origin(origin,callback){
+    // Native clients do not send Origin and authenticate with bearer/device tokens.
+    if(!origin)return callback(null,true);
+    if(allowedOrigins.has(origin))return callback(null,true);
+    // An empty allowlist is permissive only in development.
+    if(!isProduction&&allowedOrigins.size===0)return callback(null,true);
+    return callback(null,false);
+  },
+  optionsSuccessStatus:204
+}));
 app.use(express.json({limit:'2mb'}));
+
+const loginRateLimit=rateLimit({
+  windowMs:15*60*1000,
+  limit:10,
+  standardHeaders:'draft-8',
+  legacyHeaders:false,
+  message:{error:'TOO_MANY_LOGIN_ATTEMPTS'}
+});
+const registerRateLimit=rateLimit({
+  windowMs:60*60*1000,
+  limit:5,
+  standardHeaders:'draft-8',
+  legacyHeaders:false,
+  message:{error:'TOO_MANY_REGISTRATION_ATTEMPTS'}
+});
+const gpsRateLimit=rateLimit({
+  windowMs:60*1000,
+  limit:120,
+  standardHeaders:'draft-8',
+  legacyHeaders:false,
+  message:{error:'GPS_RATE_LIMIT_EXCEEDED'}
+});
 
 const pool=new Pool({
   connectionString:process.env.DATABASE_URL,
@@ -78,7 +123,7 @@ app.get('/api/health',async(_req,res)=>{
   catch(e){res.status(503).json({ok:false,error:e.message});}
 });
 
-app.post('/api/auth/register',async(req,res)=>{
+app.post('/api/auth/register',registerRateLimit,async(req,res)=>{
   const email=String(req.body?.email||'').trim().toLowerCase();
   const password=String(req.body?.password||'');
   const displayName=String(req.body?.displayName||email.split('@')[0]||'').trim();
@@ -94,7 +139,7 @@ app.post('/api/auth/register',async(req,res)=>{
   }catch(e){res.status(409).json({error:'USER_ALREADY_EXISTS'});}
 });
 
-app.post('/api/auth/login',async(req,res)=>{
+app.post('/api/auth/login',loginRateLimit,async(req,res)=>{
   const email=String(req.body?.email||'').trim().toLowerCase();
   const password=String(req.body?.password||'');
   const r=await q('SELECT * FROM users WHERE lower(email)=lower($1) LIMIT 1',[email]);
@@ -235,13 +280,13 @@ async function deviceVehicle(token){
   const r=await q('SELECT v.* FROM phones p JOIN assignments a ON a.phone_id=p.id AND a.active=true JOIN vehicles v ON v.id=a.vehicle_id WHERE p.device_token_hash=$1 AND p.active=true AND v.active=true',[hashToken(token)]);
   return r.rows[0];
 }
-app.get('/api/gps/device',async(req,res)=>{
+app.get('/api/gps/device',gpsRateLimit,async(req,res)=>{
   const token=String(req.headers['x-device-token']||'').trim();
   const v=await deviceVehicle(token);
   if(!v)return res.status(401).json({error:'DEVICE_NOT_ASSIGNED'});
   res.json({vehicleId:v.id,registration:v.registration,name:v.name});
 });
-app.post('/api/gps',async(req,res)=>{
+app.post('/api/gps',gpsRateLimit,async(req,res)=>{
   const token=String(req.headers['x-device-token']||'').trim();
   const v=await deviceVehicle(token);
   if(!v)return res.status(401).json({error:'DEVICE_NOT_ASSIGNED'});
