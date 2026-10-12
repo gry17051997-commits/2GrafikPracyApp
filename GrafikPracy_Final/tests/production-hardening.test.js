@@ -330,3 +330,24 @@ test('GPS uploads have a finite timeout and always release the timeout timer', (
   assert.match(block, /clearTimeout\(timeoutId\)/);
   assert.match(block, /GPS_API_TIMEOUT/);
 });
+
+test('central backend applies explicit CORS allowlist with safe production default', async () => {
+  const server = await fs.readFile(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.match(server, /ALLOWED_ORIGINS/);
+  assert.match(server, /if\(!origin\)return callback\(null,true\)/);
+  assert.match(server, /if\(!isProduction&&allowedOrigins\.size===0\)return callback\(null,true\)/);
+  assert.match(server, /app\.set\('trust proxy',isProduction\?1:false\)/);
+});
+
+test('central backend rate limits authentication and GPS ingestion endpoints', async () => {
+  const server = await fs.readFile(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.match(server, /import rateLimit from 'express-rate-limit'/);
+  assert.match(server, /windowMs:15\*60\*1000,[\s\S]*?limit:10/);
+  assert.match(server, /windowMs:60\*60\*1000,[\s\S]*?limit:5/);
+  assert.match(server, /windowMs:60\*1000,[\s\S]*?limit:120/);
+  assert.match(server, /app\.post\('\/api\/auth\/login',loginRateLimit/);
+  assert.match(server, /app\.post\('\/api\/auth\/register',registerRateLimit/);
+  assert.match(server, /app\.get\('\/api\/gps\/device',gpsRateLimit/);
+  assert.match(server, /app\.post\('\/api\/gps',gpsRateLimit/);
+});
+
