@@ -18,14 +18,14 @@ app.set('trust proxy',trustProxy);
 
 const allowedOrigins=String(process.env.ALLOWED_ORIGINS||'')
   .split(',')
-  .map(origin=>origin.trim().replace(/\\/$/,''))
+  .map(origin=>origin.trim())
   .filter(Boolean);
 const isProduction=process.env.NODE_ENV==='production';
 app.use(cors({
   origin(origin,callback){
     // Native clients normally omit Origin. This is compatibility, not authentication.
     if(!origin)return callback(null,true);
-    const normalized=String(origin).replace(/\\/$/,'');
+    const normalized=String(origin);
     if(allowedOrigins.includes(normalized))return callback(null,true);
     // An empty list is permissive only in non-production development.
     if(allowedOrigins.length===0&&!isProduction)return callback(null,true);
