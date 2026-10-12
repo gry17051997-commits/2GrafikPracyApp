@@ -10,7 +10,7 @@ Centralny backend aplikacji. Firestore i Firebase Functions nie są wymagane.
 
 ## Uruchomienie
 
-npm ci
+npm install
 npm start
 
 Serwer automatycznie wykonuje schema.sql przy starcie.
@@ -40,4 +40,7 @@ Build Android musi otrzymać zmienną EXPO_PUBLIC_API_URL wskazującą publiczny
 
 ## Bezpieczeństwo
 
-Hasła są haszowane scrypt z indywidualną losową solą. Tokeny sesji i tokeny urządzeń GPS są przechowywane po stronie serwera wyłącznie jako SHA-256 hash.
+- Hasła są haszowane scrypt z indywidualną losową solą. Tokeny sesji i tokeny urządzeń GPS są przechowywane po stronie serwera wyłącznie jako SHA-256 hash.
+- `ALLOWED_ORIGINS` w produkcji musi zawierać rozdzielone przecinkami pełne originy web aplikacji, np. `https://grafik.example.com` bez ścieżek i końcowych endpointów. Nie wpisuj adresu API jako originu, chyba że aplikacja web faktycznie działa pod tym adresem.
+- Gdy `ALLOWED_ORIGINS` jest pusty, wszystkie originy są akceptowane wyłącznie poza produkcją. W produkcji żądania bez nagłówka `Origin` pozostają dozwolone dla klientów natywnych, a niezaufane originy przeglądarkowe nie otrzymują nagłówków CORS.
+- Limity: logowanie 10 żądań na 15 minut, rejestracja 5 żądań na godzinę, odbiór i wysyłka GPS 120 żądań na minutę. W produkcji backend ufa jednemu hopowi proxy Render.
