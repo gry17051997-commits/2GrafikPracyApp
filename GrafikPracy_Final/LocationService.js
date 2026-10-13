@@ -25,12 +25,20 @@ const distanceMeters=(a,b)=>{if(!a||!b)return Infinity;const R=6371000,p1=a.lati
 const getDeviceAssignment=async token=>{
   if(!API_BASE_URL||!token)throw new Error('GPS_DEVICE_CONFIGURATION_MISSING');
   let response;
+  const controller=new AbortController();
+  const timeoutId=setTimeout(()=>controller.abort(),8000);
   try{
-    response=await fetch(API_BASE_URL+'/gps/device',{headers:{'X-Device-Token':token}});
+    response=await fetch(API_BASE_URL+'/gps/device',{
+      headers:{'X-Device-Token':token},
+      signal:controller.signal
+    });
   }catch(error){
     // Błąd sieci/API nie jest dowodem, że urządzenie utraciło przypisanie.
     // Nie wolno z jego powodu zatrzymywać działającego foreground service.
-    throw new Error('GPS_ASSIGNMENT_NETWORK_ERROR: '+String(error?.message||error));
+    const reason=error?.name==='AbortError'?'GPS_ASSIGNMENT_TIMEOUT':'GPS_ASSIGNMENT_NETWORK_ERROR';
+    throw new Error(reason+': '+String(error?.message||error));
+  }finally{
+    clearTimeout(timeoutId);
   }
   if(response.status===401||response.status===404)return null;
   if(!response.ok)throw new Error('GPS_ASSIGNMENT_HTTP_'+response.status);
