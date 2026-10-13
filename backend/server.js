@@ -263,11 +263,22 @@ app.get('/api/gps/mine',auth,async(req,res)=>{
   const r=await q('SELECT v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id AND v.active=true LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE a.user_id=$1 AND a.active=true ORDER BY a.updated_at DESC LIMIT 1',[req.user.id]);
   res.json({vehicle:r.rows[0]||null});
 });
-app.get('/api/gps/vehicles',auth,async(_req,res)=>{
-  const r=await q('SELECT v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at FROM vehicles v LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE v.active=true ORDER BY v.registration');
+app.get('/api/gps/vehicles',auth,async(req,res)=>{
+  const columns='v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at';
+  let r;
+  if(req.user.role==='admin'||req.user.role==='locator'){
+    r=await q('SELECT '+columns+' FROM vehicles v LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE v.active=true ORDER BY v.registration');
+  }else{
+    // Kierowca może odczytać wyłącznie pojazd aktualnie przypisany do jego konta.
+    r=await q('SELECT '+columns+' FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id AND v.active=true LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE a.user_id=$1 AND a.active=true ORDER BY a.updated_at DESC LIMIT 1',[req.user.id]);
+  }
   res.json({vehicles:r.rows});
 });
 app.get('/api/gps/:vehicleId/history',auth,async(req,res)=>{
+  if(req.user.role!=='admin'&&req.user.role!=='locator'){
+    const allowed=await q('SELECT 1 FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id WHERE a.user_id=$1 AND a.vehicle_id=$2 AND a.active=true AND v.active=true LIMIT 1',[req.user.id,req.params.vehicleId]);
+    if(!allowed.rows[0])return res.status(403).json({error:'GPS_VEHICLE_FORBIDDEN'});
+  }
   const r=await q("SELECT latitude,longitude,accuracy,altitude,speed,heading,observed_at,received_at FROM gps_history WHERE vehicle_id=$1 AND observed_at>=NOW()-INTERVAL '7 days' ORDER BY observed_at DESC LIMIT 5000",[req.params.vehicleId]);
   res.json({history:r.rows});
 });
