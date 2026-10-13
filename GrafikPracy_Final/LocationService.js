@@ -72,6 +72,7 @@ async function saveLocationInternal(location){
     heading:Number.isFinite(c.heading)?Number(c.heading):null,
     observedAt:Number(location.timestamp||now)
   };
+  await patchDiagnostics({lastUploadAttemptAt:Date.now(),lastUploadAttemptObservedAt:payload.observedAt,lastUploadAttemptError:null});
   let result=null,lastError=null;
   // Krótkie ponowienia chronią przed utratą pojedynczego pomiaru przy chwilowym
   // zaniku sieci. Błąd API nigdy sam w sobie nie wyłącza usługi GPS.
@@ -87,12 +88,12 @@ async function saveLocationInternal(location){
   }
   if(!result){
     const message=String(lastError?.message||lastError||'unknown');
-    await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now()});
+    await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now(),lastUploadAttemptError:message.slice(0,240)});
     console.log('LOCATION_API_WRITE_ERROR_AFTER_RETRIES',message);
     return;
   }
   try{
-    await patchDiagnostics({lastUploadAt:Date.now(),lastUploadError:null,lastUploadErrorAt:null});
+    await patchDiagnostics({lastUploadAt:Date.now(),lastUploadError:null,lastUploadErrorAt:null,lastUploadAttemptError:null,lastUploadSucceededObservedAt:payload.observedAt});
     const assignedVehicleId=normalizeVehicleId(result.vehicleId||result.registration||cfg.vehicleId);
     const local={...payload,vehicleId:assignedVehicleId,registration:result.registration||cfg.registration||'',receivedAt:Date.now()};
     let previous=null;try{const raw=await AsyncStorage.getItem(LOCATION_CURRENT_KEY);previous=raw?JSON.parse(raw):null;}catch{}
@@ -112,16 +113,25 @@ function saveLocation(location){const run=saveQueue.then(()=>saveLocationInterna
 // Background tasks are native-only. Avoid calling TaskManager APIs in web builds.
 if(Platform.OS!=='web'&&!TaskManager.isTaskDefined(LOCATION_TASK_NAME)){
   TaskManager.defineTask(LOCATION_TASK_NAME,async({data,error})=>{
+    const invokedAt=Date.now();
     if(error){
-      await patchDiagnostics({lastTaskError:String(error.message||error).slice(0,240),lastTaskErrorAt:Date.now()});
+      await patchDiagnostics({lastTaskInvocationAt:invokedAt,lastTaskInvocationStatus:'error',lastTaskError:String(error.message||error).slice(0,240),lastTaskErrorAt:invokedAt});
       return;
     }
-    if(!data?.locations?.length)return;
-    for(const location of data.locations){
+    const locations=Array.isArray(data?.locations)?data.locations:[];
+    await patchDiagnostics({lastTaskInvocationAt:invokedAt,lastTaskInvocationStatus:locations.length?'locations-received':'empty-batch',lastTaskLocationCount:locations.length,lastTaskError:null,lastTaskErrorAt:null});
+    if(!locations.length)return;
+    for(const location of locations){
       const coords=location?.coords||{};
       await patchDiagnostics({lastTaskAt:Date.now(),lastTaskError:null,lastTaskErrorAt:null,lastLocalLatitude:Number(coords.latitude)||null,lastLocalLongitude:Number(coords.longitude)||null,lastLocalObservedAt:Number(location.timestamp)||Date.now()});
-      await saveLocation(location);
+      try{
+        await saveLocation(location);
+        await patchDiagnostics({lastTaskLocationProcessedAt:Date.now(),lastTaskLocationProcessedObservedAt:Number(location.timestamp)||Date.now(),lastTaskLocationProcessError:null});
+      }catch(taskError){
+        await patchDiagnostics({lastTaskLocationProcessError:String(taskError?.message||taskError).slice(0,240),lastTaskLocationProcessErrorAt:Date.now()});
+      }
     }
+    await patchDiagnostics({lastTaskInvocationCompletedAt:Date.now()});
   });
 }
 
