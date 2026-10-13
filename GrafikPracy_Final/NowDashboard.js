@@ -38,7 +38,7 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
        if(cloudUser?.role==='locator'){
          const selected=await (await import('./apiClient')).apiGetMyGps();
          if(cancelled)return;
-         if(!selected){setLocation(null);setLocationError('Brak przypisanego auta lub brak odebranej pozycji GPS.');return;}
+         if(!selected){setLocationError('Brak nowego odczytu GPS. Zachowuję ostatnią odebraną pozycję.');return;}
          const point={...selected,updatedAt:selected.observed_at};
          setLocation(point);
          const observed=serverMillis(point.updatedAt);
@@ -123,7 +123,7 @@ export default function NowDashboard({weeks,rotation,warehouse,times,personColor
    <View style={S.locationCard}>
      <Text style={S.locationStatus}>{location?(locationError?'🟠 '+locationError:(Number(location.speed||0)*3.6>5?'🚚 AUTO W RUCHU':'🅿️ AUTO NA POSTOJU')):'🔴 BRAK LOKALIZACJI'}</Text>
      {location&&<><Text style={S.locationCoords}>{locationAddress}</Text><Text style={S.locationMeta}>{Number(location.latitude).toFixed(5)}, {Number(location.longitude).toFixed(5)} · Aktualizacja {new Date(serverMillis(location.updatedAt)).toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})} · ±{Math.round(Number(location.accuracy||0))} m</Text></>}
-     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="mini-mapa-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} src={mapUrl(location)}/>:<WebView ref={miniMapRef} key="gps-mini-map" originWhitelist={['*']} mixedContentMode="compatibility" source={{html:miniMapHtml,baseUrl:'https://www.openstreetmap.org/'}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} androidLayerType="software" onLoadEnd={()=>{miniMapLoaded.current=true;syncMiniMap();}} onError={()=>{miniMapLoaded.current=false;}} style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
+     <View style={S.miniMap}>{location?(Platform.OS==='web'?<iframe title="mini-mapa-lokalizacji" style={{width:'100%',height:'100%',border:0,display:'block'}} src={mapUrl(location)}/>:<WebView key={"gps-mini-map-"+Number(location.latitude).toFixed(5)+"-"+Number(location.longitude).toFixed(5)} originWhitelist={['*']} mixedContentMode="always" source={{uri:mapUrl(location)}} javaScriptEnabled domStorageEnabled setSupportMultipleWindows={false} androidLayerType="software" style={{flex:1,backgroundColor:'#0d121b'}}/>):<Text style={S.locationEmpty}>Mapa pojawi się po odebraniu pozycji GPS.</Text>}</View>
      {location&&<TouchableOpacity accessibilityRole="button" accessibilityLabel="Otwórz aktualną pozycję na mapie" onPress={openMap} style={S.openMapButton}><Text style={S.openMapButtonText}>🗺️ OTWÓRZ MAPĘ NA ŻYWO</Text></TouchableOpacity>}
    </View>
  </ScrollView>;
