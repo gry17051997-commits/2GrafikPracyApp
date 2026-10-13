@@ -384,3 +384,18 @@ test('missing vehicle assignment pauses GPS without clearing the enabled intent'
   assert.equal(missingAssignmentAction(false), 'stay-disabled');
   assert.equal(missingAssignmentAction(undefined), 'stay-disabled');
 });
+
+
+test('GPS assignment lookup has a finite timeout and does not treat network errors as unassignment', () => {
+  const source = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const getDeviceAssignment=async token=>');
+  const end = source.indexOf('\n};', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /new AbortController\(\)/);
+  assert.match(block, /setTimeout\(\(\)=>controller\.abort\(\),8000\)/);
+  assert.match(block, /clearTimeout\(timeoutId\)/);
+  assert.match(block, /GPS_ASSIGNMENT_NETWORK_ERROR/);
+  assert.match(block, /GPS_ASSIGNMENT_TIMEOUT/);
+  assert.match(block, /response\.status===401\|\|response\.status===404/);
+});
