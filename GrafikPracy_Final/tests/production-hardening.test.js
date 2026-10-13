@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import test from 'node:test';
-import {missingAssignmentAction} from '../gpsLifecycle.js';
+import gpsLifecycle from '../gpsLifecycle.js';
+const {missingAssignmentAction} = gpsLifecycle;
 import assert from 'node:assert/strict';
 import {
   canAssignPersonToDay,
