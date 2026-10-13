@@ -83,8 +83,10 @@ app.post('/api/auth/register',async(req,res)=>{
   const password=String(req.body?.password||'');
   const displayName=String(req.body?.displayName||email.split('@')[0]||'').trim();
   if(!validEmail(email)||password.length<6||password.length>128||displayName.length<2||displayName.length>100)return res.status(400).json({error:'INVALID_REGISTRATION'});
-  const count=await q('SELECT COUNT(*)::int AS n FROM users');
-  const role=Number(count.rows[0].n)===0?'admin':'employee';
+  // Public registration must never grant admin based on a racy user count.
+  // Only an explicitly provisioned bootstrap email may receive the admin role.
+  const bootstrapAdminEmail=String(process.env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase();
+  const role=bootstrapAdminEmail && email===bootstrapAdminEmail?'admin':'employee';
   try{
     const uid=id();
     const r=await q('INSERT INTO users(id,email,password_hash,display_name,role) VALUES($1,$2,$3,$4,$5) RETURNING *',[uid,email,hashPassword(password),displayName,role]);
