@@ -339,3 +339,12 @@ test('web startup does not call native-only notification or background-task setu
   assert.match(indexSource, /Platform\.OS\s*!==\s*['"]web['"][\s\S]*?Notifications\.setNotificationHandler/);
   assert.match(locationSource, /Platform\.OS\s*!==\s*['"]web['"][\s\S]*?TaskManager\.isTaskDefined/);
 });
+
+
+test('central API client prefixes every endpoint with the backend /api mount', () => {
+  const client = fs.readFileSync(new URL('../apiClient.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.match(client, /API_BASE_URL=API_ORIGIN\s*\?\s*API_ORIGIN\+'\\/api'/);
+  assert.match(client, /api\\('/auth\\/login'/);
+  assert.match(server, /app\\.post\\('\\/api\\/auth\\/login'/);
+});
