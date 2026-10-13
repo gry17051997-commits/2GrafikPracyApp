@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import {Platform, AppState} from 'react-native';
 import {API_BASE_URL, apiPostGps} from './apiClient';
+import {missingAssignmentAction} from './gpsLifecycle';
 
 export const LOCATION_TASK_NAME='grafik-pracy-vehicle-location-v2';
 export const LOCATION_CONFIG_KEY='grafik-pracy-location-config-v2';
@@ -188,7 +189,22 @@ export async function ensureVehicleLocationTracking(){
   const token=await getLocationDeviceToken();
   if(!token)return {ok:false,reason:'device-token-missing'};
   const assignment=await getDeviceAssignment(token);
-  if(!assignment?.vehicleId){await stopVehicleLocationTracking();return {ok:false,reason:'device-not-assigned'};}
+  if(!assignment?.vehicleId){
+    // Brak przypisania nie oznacza, że użytkownik wyłączył GPS.
+    // Zatrzymaj zbieranie punktów do czasu przypisania, ale zachowaj zgodę
+    // enabled=true, aby kolejna synchronizacja mogła automatycznie wznowić usługę.
+    const action=missingAssignmentAction(cfg.enabled);
+    if(action==='pause-preserve-enabled'){
+      if(await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)){
+        await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+      }
+      await patchDiagnostics({lastAssignmentStatus:'unassigned',lastAssignmentCheckedAt:Date.now(),lastAssignmentError:null});
+      return {ok:false,reason:'device-not-assigned',recoverable:true};
+    }
+    await patchDiagnostics({lastAssignmentStatus:'unassigned',lastAssignmentCheckedAt:Date.now(),lastAssignmentError:null});
+    return {ok:false,reason:'disabled'};
+  }
+  await patchDiagnostics({lastAssignmentStatus:'assigned',lastAssignmentCheckedAt:Date.now(),lastAssignmentError:null});
   const fg=await Location.getForegroundPermissionsAsync(),bg=await Location.getBackgroundPermissionsAsync();
   if(fg.status!=='granted'||bg.status!=='granted')return {ok:false,reason:'permission'};
   if(!(await Location.hasServicesEnabledAsync()))return {ok:false,reason:'location-services-disabled'};
