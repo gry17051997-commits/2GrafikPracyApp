@@ -302,7 +302,9 @@ test('dashboard GPS mini map renders Leaflet directly in WebView and updates the
   assert.match(dashboard, /const miniMapHtml=/);
   assert.match(dashboard, /key="gps-mini-map"/);
   assert.match(dashboard, /L\.map\('gpsMap'/);
-  assert.match(dashboard, /L\.tileLayer\('https:\/\/\{s\}\.tile\.openstreetmap\.org/);
+  assert.match(dashboard, /L\.tileLayer\('https:\/\/api\.maptiler\.com\/maps\/streets-v4/);
+  assert.match(dashboard, /process\.env\.EXPO_PUBLIC_MAPTILER_KEY/);
+  assert.match(dashboard, /Błąd kafelków MapTiler/);
   assert.match(dashboard, /window\.setGpsPoint=function\(lat,lon\)/);
   assert.match(dashboard, /marker\.setLatLng\(\[lat,lon\]\)/);
   assert.match(dashboard, /injectJavaScript\('window\.setGpsPoint\('/);
