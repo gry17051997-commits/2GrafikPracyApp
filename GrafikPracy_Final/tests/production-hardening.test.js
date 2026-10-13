@@ -316,6 +316,17 @@ test('live GPS map keeps its WebView mounted and updates map data without reload
   assert.doesNotMatch(dashboard, /key=\{String\(location\.id\|\|location\.registration\)\+'_ '\+/);
 });
 
+test('web live GPS map reuses one iframe document and updates through postMessage', async () => {
+  const fs = await import('node:fs/promises');
+  const dashboard = await fs.readFile(new URL('../LiveLocationDashboard.js', import.meta.url), 'utf8');
+
+  assert.match(dashboard, /const liveMapHtml=useMemo\(\(\)=>buildLiveMapHtml\(null,\[\],true\),\[\]\)/);
+  assert.match(dashboard, /srcDoc=\{liveMapHtml\}/);
+  assert.match(dashboard, /contentWindow\.postMessage\(\{type:'gps-map-update',payload:mapDataRef\.current\},'\*'\)/);
+  assert.match(dashboard, /window\.addEventListener\("message",function\(event\)/);
+  assert.doesNotMatch(dashboard, /srcDoc=\{buildLiveMapHtml\(location,history\)\}/);
+});
+
 test('GPS uploads have a finite timeout and always release the timeout timer', () => {
   const source = fs.readFileSync(new URL('../apiClient.js', import.meta.url), 'utf8');
   const start = source.indexOf('export async function apiPostGps(');
