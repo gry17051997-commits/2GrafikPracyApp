@@ -11,24 +11,39 @@ const ageText=ts=>{const m=Math.max(0,Math.floor((Date.now()-serverMillis(ts))/6
 const geocodeAddress=async point=>{const lat=Number(point?.latitude),lon=Number(point?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;try{const res=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+encodeURIComponent(lat)+'&longitude='+encodeURIComponent(lon)+'&localityLanguage=pl',{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),locality=d.city||d.locality||d.principalSubdivision||'',road=d.localityInfo?.informative?.find(x=>/street|road|ulica|droga/i.test(x.description||''))?.name||'';const address=[locality,road].filter(Boolean).join(', ');if(address)return address;}}catch{}try{const res=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&accept-language=pl&lat='+encodeURIComponent(lat)+'&lon='+encodeURIComponent(lon),{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),a=d?.address||{},locality=a.city||a.town||a.village||a.municipality||a.suburb||a.county||'',road=a.road||a.pedestrian||a.residential||a.highway||'',house=a.house_number||'',ref=a.ref||'';return [locality,ref&&ref!==road?ref:'',road+(house?' '+house:'')].filter(Boolean).join(', ')||d.name||null;}}catch{}return null;};
 const mapUrl=loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;const d=0.006;return 'https://www.openstreetmap.org/export/embed.html?bbox='+(lon-d)+'%2C'+(lat-d)+'%2C'+(lon+d)+'%2C'+(lat+d)+'&layer=mapnik&marker='+lat+'%2C'+lon;};
 const buildLiveMapData=(current,rows)=>{
- const valid=(rows||[]).filter(p=>Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&serverMillis(p.updatedAt)>0).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
- const segments=[];let segment=[],previous=null;
+ const valid=(rows||[])
+  .filter(p=>Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&serverMillis(p.updatedAt)>0)
+  .sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
+ const segments=[];
+ let segment=[],previous=null;
  const flush=()=>{if(segment.length>1)segments.push(segment);segment=[];};
- for(const p of valid){
-   const point={latitude:Number(p.latitude),longitude:Number(p.longitude),speed:Number(p.speed||0),time:serverMillis(p.updatedAt)};
-   const moved=previous?distanceMeters(previous,point):0;
-   const gap=previous?point.time-previous.time:0;
-   const continuous=previous&&gap>0&&gap<=15*60*1000;
-   const isMoving=point.speed*3.6>=5||moved>=25;
-   if(!continuous)flush();
-   if(continuous&&isMoving){
+ for(const row of valid){
+  const point={latitude:Number(row.latitude),longitude:Number(row.longitude),speed:Math.max(0,Number(row.speed)||0),time:serverMillis(row.updatedAt)};
+  if(previous){
+   const gap=point.time-previous.time;
+   const moved=distanceMeters(previous,point);
+   if(gap<=0||gap>15*60*1000){
+    flush();
+   }else{
+    const derivedSpeed=moved/(gap/1000);
+    const moving=Math.max(point.speed,previous.speed,derivedSpeed)>=1.3888889;
+    if(moving){
      if(!segment.length)segment.push([previous.latitude,previous.longitude]);
-     if(moved>=8)segment.push([point.latitude,point.longitude]);
-   }else flush();
-   previous=point;
+     if(moved>=3)segment.push([point.latitude,point.longitude]);
+    }else{
+     flush();
+    }
+   }
+  }
+  previous=point;
  }
  flush();
- return {current:current?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Number(current.speed||0),time:serverMillis(current.updatedAt)}:null,segments};
+ return {
+  current:current&&Number.isFinite(Number(current.latitude))&&Number.isFinite(Number(current.longitude))
+   ?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Math.max(0,Number(current.speed)||0),time:serverMillis(current.updatedAt)}
+   :null,
+  segments
+ };
 };
 const buildLiveMapHtml=(current,rows,liveUpdates=false)=>{
  const initialData=JSON.stringify(liveUpdates?{current:null,segments:[]}:buildLiveMapData(current,rows)).replace(/</g,'\\u003c');
@@ -37,7 +52,7 @@ html,body,#gpsMap,#map{height:100%;width:100%;margin:0;padding:0;overflow:hidden
 .leaflet-container{position:relative;overflow:hidden;outline:0;background:#0d121b;touch-action:pan-x pan-y}
 .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-map-pane svg,.leaflet-map-pane canvas{position:absolute;left:0;top:0}
 .leaflet-pane{z-index:400}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}
-.leaflet-tile-container{pointer-events:none}.leaflet-tile{visibility:hidden;max-width:none!important;max-height:none!important}.leaflet-tile-loaded{visibility:inherit}
+.leaflet-tile-container{pointer-events:none}.leaflet-tile{visibility:visible!important;display:block!important;max-width:none!important;max-height:none!important}
 .leaflet-map-pane svg{overflow:hidden}.leaflet-control-container{position:absolute;inset:0;pointer-events:none}
 .leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-right{right:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}
 .leaflet-control{position:relative;z-index:800;pointer-events:auto;float:left;clear:both}.leaflet-right .leaflet-control{float:right}
