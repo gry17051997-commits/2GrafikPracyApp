@@ -400,3 +400,21 @@ test('GPS assignment lookup has a finite timeout and does not treat network erro
   assert.match(block, /GPS_ASSIGNMENT_TIMEOUT/);
   assert.match(block, /response\.status===401\|\|response\.status===404/);
 });
+
+
+test('GPS fleet and history endpoints restrict employee access to assigned vehicles', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const fleetStart = server.indexOf("app.get('/api/gps/vehicles',auth");
+  const fleetEnd = server.indexOf("\napp.get('/api/gps/:vehicleId/history'", fleetStart);
+  assert.ok(fleetStart >= 0 && fleetEnd > fleetStart);
+  const fleetRoute = server.slice(fleetStart, fleetEnd);
+  assert.match(fleetRoute, /req\.user\.role==='admin'\|\|req\.user\.role==='locator'/);
+  assert.match(fleetRoute, /WHERE a\.user_id=\$1 AND a\.active=true/);
+
+  const historyStart = server.indexOf("app.get('/api/gps/:vehicleId/history',auth");
+  const historyEnd = server.indexOf("\napp.get('/api/schedules/:weekId'", historyStart);
+  assert.ok(historyStart >= 0 && historyEnd > historyStart);
+  const historyRoute = server.slice(historyStart, historyEnd);
+  assert.match(historyRoute, /GPS_VEHICLE_FORBIDDEN/);
+  assert.match(historyRoute, /a\.user_id=\$1 AND a\.vehicle_id=\$2 AND a\.active=true/);
+});
