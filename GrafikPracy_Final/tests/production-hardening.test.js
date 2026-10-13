@@ -280,6 +280,22 @@ test('central API configuration is enabled and Firebase packages are absent', ()
   assert.doesNotMatch(lock, /"node_modules\/firebase"/);
 });
 
+test('public registration cannot grant admin through a first-user race', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const start = server.indexOf("app.post('/api/auth/register'");
+  const end = server.indexOf("\\napp.post('/api/auth/login'", start);
+  assert.ok(start >= 0 && end > start);
+  const route = server.slice(start, end);
+  assert.match(route, /BOOTSTRAP_ADMIN_EMAIL/);
+  assert.match(route, /email===bootstrapAdminEmail\?'admin':'employee'/);
+  assert.doesNotMatch(route, /SELECT COUNT\(\*\)::int AS n FROM users/);
+});
+
+test('release APK build has a safe fallback for the central API URL', () => {
+  const workflow = fs.readFileSync(new URL('../../.github/workflows/build-apk.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /secrets\\.EXPO_PUBLIC_API_URL \\|\\| 'https:\\/\\/grafik-pracy-api-fra\\.onrender\\.com'/);
+});
+
 test('central backend protects document writes with revision checks', () => {
   const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
   assert.match(server, /expectedRevision/);
