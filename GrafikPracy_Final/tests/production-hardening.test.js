@@ -296,13 +296,18 @@ test('central document store rejects arbitrary collection names', () => {
   assert.match(server, /!STORE_COLLECTIONS\.has\(name\)/);
 });
 
-test('dashboard GPS mini map keeps a stable WebView and updates the OSM embed without remounting', async () => {
+test('dashboard GPS mini map renders Leaflet directly in WebView and updates the marker without nested iframe reloads', async () => {
   const fs = await import('node:fs/promises');
   const dashboard = await fs.readFile(new URL('../NowDashboard.js', import.meta.url), 'utf8');
   assert.match(dashboard, /const miniMapHtml=/);
   assert.match(dashboard, /key="gps-mini-map"/);
+  assert.match(dashboard, /L\.map\('gpsMap'/);
+  assert.match(dashboard, /L\.tileLayer\('https:\/\/\{s\}\.tile\.openstreetmap\.org/);
   assert.match(dashboard, /window\.setGpsPoint=function\(lat,lon\)/);
+  assert.match(dashboard, /marker\.setLatLng\(\[lat,lon\]\)/);
   assert.match(dashboard, /injectJavaScript\('window\.setGpsPoint\('/);
+  assert.match(dashboard, /Nie udało się pobrać silnika mapy/);
+  assert.doesNotMatch(dashboard, /<iframe id="gpsMapFrame"/);
   assert.doesNotMatch(dashboard, /key=\{Math\.round\(Number\(location\.latitude\)\*10000\)/);
 });
 
