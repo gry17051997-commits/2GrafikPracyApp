@@ -82,6 +82,18 @@ function serverTimestampMillis(value) {
   return 0;
 }
 
+function getShiftEndEpoch(shiftStartEpoch, startMinute, endMinute) {
+  const start = Number(shiftStartEpoch);
+  const startMin = Number(startMinute);
+  let endMin = Number(endMinute);
+  if (!Number.isFinite(start) || !Number.isInteger(startMin) || !Number.isInteger(endMin)
+    || startMin < 0 || startMin >= 1440 || endMin < 0 || endMin >= 1440) {
+    throw new RangeError('Invalid shift start or end time');
+  }
+  if (endMin <= startMin) endMin += 1440;
+  return start + (endMin - startMin) * 60000;
+}
+
 function addHourEpoch(timestampMs) {
   return Number(timestampMs) + 3600000;
 }
@@ -95,5 +107,6 @@ module.exports = {
   isValidScheduleWeekMap,
   isValidScheduleConditions,
   serverTimestampMillis,
-  addHourEpoch
+  addHourEpoch,
+  getShiftEndEpoch
 };
