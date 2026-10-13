@@ -30,7 +30,7 @@ import {CENTRAL_API_ENABLED, db} from './firebaseConfig';
 import {apiLogin,apiLogout,apiMe,api,collection,doc,setDoc,getDoc,onSnapshot,serverTimestamp,addDoc,query,where,updateDoc,deleteField,orderBy,limit,runTransaction} from './apiClient';
 import NowDashboard from './NowDashboard';
 import AdminUsersPanel from './AdminUsersPanel';
-import {canAssignPersonToDay, isValidScheduleConditions, isValidScheduleWeekMap, isValidWeekIdMap, maxAdditionalAssignments} from './scheduleEngine';
+import {canAssignPersonToDay, isValidScheduleConditions, isValidScheduleWeekMap, isValidWeekIdMap, maxAdditionalAssignments, getShiftEndEpoch} from './scheduleEngine';
 
 const KEY = 'grafik-pracy-v5';
 const LEGACY_KEY = 'grafik-pracy-v4';
@@ -1232,12 +1232,10 @@ export default function App() {
             || times;
           const shiftTimes = weekTimes;
           const startMin = parseHM(si === 0 ? shiftTimes.s1 : shiftTimes.s2);
-          let endMin = parseHM(si === 0 ? shiftTimes.e1 : shiftTimes.e2);
-          if (endMin <= startMin) endMin += 24 * 60;
+          const endMin = parseHM(si === 0 ? shiftTimes.e1 : shiftTimes.e2);
           const shiftStart = new Date(shiftDate);
           shiftStart.setHours(Math.floor(startMin/60),startMin%60,0,0);
-          const shiftEnd = new Date(shiftStart);
-          shiftEnd.setMinutes(endMin);
+          const shiftEnd = new Date(getShiftEndEpoch(shiftStart.getTime(),startMin,endMin));
           const first = new Date(shiftStart);
           first.setMinutes(40,0,0);
           if (first <= shiftStart) first.setHours(first.getHours()+1);
