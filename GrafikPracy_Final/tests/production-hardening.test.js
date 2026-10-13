@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import test from 'node:test';
+import {missingAssignmentAction} from '../gpsLifecycle.js';
 import assert from 'node:assert/strict';
 import {
   canAssignPersonToDay,
@@ -375,4 +376,11 @@ test('report alarm shift end is calculated from shift duration, not setMinutes o
 test('report alarm shift end rejects invalid minute values', () => {
   assert.throws(() => getShiftEndEpoch(Date.now(), -1, 60), RangeError);
   assert.throws(() => getShiftEndEpoch(Date.now(), 60, 1440), RangeError);
+});
+
+
+test('missing vehicle assignment pauses GPS without clearing the enabled intent', () => {
+  assert.equal(missingAssignmentAction(true), 'pause-preserve-enabled');
+  assert.equal(missingAssignmentAction(false), 'stay-disabled');
+  assert.equal(missingAssignmentAction(undefined), 'stay-disabled');
 });
