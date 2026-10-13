@@ -10,7 +10,8 @@ import {
   isValidScheduleWeekMap,
   isValidScheduleConditions,
   serverTimestampMillis,
-  addHourEpoch
+  addHourEpoch,
+  getShiftEndEpoch
 } from '../scheduleEngine.js';
 
 test('24h disabled blocks a second shift for the same person', () => {
@@ -347,4 +348,26 @@ test('central API client prefixes every endpoint with the backend /api mount', (
   assert.ok(client.includes("API_BASE_URL=API_ORIGIN ? API_ORIGIN+'/api' : ''"));
   assert.ok(client.includes("api('/auth/login'"));
   assert.ok(server.includes("app.post('/api/auth/login'"));
+});
+
+
+test('report alarm shift end is calculated from shift duration, not setMinutes overflow', () => {
+  const localDate = new Date(2026, 9, 14, 0, 0, 0, 0);
+  const morningStart = new Date(localDate);
+  morningStart.setHours(6, 0, 0, 0);
+  const morningEnd = new Date(getShiftEndEpoch(morningStart.getTime(), 6 * 60, 16 * 60));
+  assert.equal(morningEnd.getTime() - morningStart.getTime(), 10 * 60 * 60 * 1000);
+  assert.equal(morningEnd.getHours(), 16);
+
+  const nightStart = new Date(localDate);
+  nightStart.setHours(18, 0, 0, 0);
+  const nightEnd = new Date(getShiftEndEpoch(nightStart.getTime(), 18 * 60, 6 * 60));
+  assert.equal(nightEnd.getTime() - nightStart.getTime(), 12 * 60 * 60 * 1000);
+  assert.equal(nightEnd.getDate(), localDate.getDate() + 1);
+  assert.equal(nightEnd.getHours(), 6);
+});
+
+test('report alarm shift end rejects invalid minute values', () => {
+  assert.throws(() => getShiftEndEpoch(Date.now(), -1, 60), RangeError);
+  assert.throws(() => getShiftEndEpoch(Date.now(), 60, 1440), RangeError);
 });
