@@ -17,6 +17,8 @@ env:
   CI: "1"
   # The diagnostic APK must connect to the same central API as production.
   EXPO_PUBLIC_API_URL: https://grafik-pracy-api-fra.onrender.com
+  # The native map uses this key to load MapTiler tiles inside Android WebView.
+  EXPO_PUBLIC_MAPTILER_KEY: ${{ secrets.EXPO_PUBLIC_MAPTILER_KEY }}
 
 jobs:
   build_apk:
