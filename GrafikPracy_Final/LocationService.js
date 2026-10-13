@@ -109,7 +109,8 @@ async function saveLocationInternal(location){
 }
 function saveLocation(location){const run=saveQueue.then(()=>saveLocationInternal(location));saveQueue=run.catch(()=>{});return run;}
 
-if(!TaskManager.isTaskDefined(LOCATION_TASK_NAME)){
+// Background tasks are native-only. Avoid calling TaskManager APIs in web builds.
+if(Platform.OS!=='web'&&!TaskManager.isTaskDefined(LOCATION_TASK_NAME)){
   TaskManager.defineTask(LOCATION_TASK_NAME,async({data,error})=>{
     if(error){
       await patchDiagnostics({lastTaskError:String(error.message||error).slice(0,240),lastTaskErrorAt:Date.now()});

@@ -330,3 +330,12 @@ test('GPS uploads have a finite timeout and always release the timeout timer', (
   assert.match(block, /clearTimeout\(timeoutId\)/);
   assert.match(block, /GPS_API_TIMEOUT/);
 });
+
+
+test('web startup does not call native-only notification or background-task setup', async () => {
+  const fs = await import('node:fs/promises');
+  const indexSource = await fs.readFile(new URL('../index.js', import.meta.url), 'utf8');
+  const locationSource = await fs.readFile(new URL('../LocationService.js', import.meta.url), 'utf8');
+  assert.match(indexSource, /Platform\.OS\s*!==\s*['"]web['"][\s\S]*?Notifications\.setNotificationHandler/);
+  assert.match(locationSource, /Platform\.OS\s*!==\s*['"]web['"][\s\S]*?TaskManager\.isTaskDefined/);
+});
