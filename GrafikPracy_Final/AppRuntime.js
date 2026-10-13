@@ -2691,9 +2691,13 @@ const settings = (
       <Text style={S.helpLine}>Po aktywacji Android poprosi o dokładną lokalizację oraz lokalizację w tle. Wybierz „Zawsze zezwalaj”, jeśli system pokaże taką opcję.</Text>
       <View style={S.option}><View style={{flex:1}}>
         <Text style={S.optionText}>🛠️ Diagnostyka GPS w tle</Text>
+        <Text style={S.muted}>Ostatnie uruchomienie zadania: {locationDiagnostics.lastTaskInvocationAt?new Date(locationDiagnostics.lastTaskInvocationAt).toLocaleString('pl-PL'):'brak danych'}</Text>
+        <Text style={S.muted}>Wynik zadania: {locationDiagnostics.lastTaskInvocationStatus||'brak danych'}{Number.isFinite(Number(locationDiagnostics.lastTaskLocationCount))?' • pomiary: '+locationDiagnostics.lastTaskLocationCount:''}</Text>
         <Text style={S.muted}>Ostatni pomiar lokalny: {locationDiagnostics.lastTaskAt?new Date(locationDiagnostics.lastTaskAt).toLocaleString('pl-PL'):'brak pomiaru zadania w tle'}</Text>
+        <Text style={S.muted}>Ostatnia próba wysyłki: {locationDiagnostics.lastUploadAttemptAt?new Date(locationDiagnostics.lastUploadAttemptAt).toLocaleString('pl-PL'):'brak danych'}</Text>
         <Text style={S.muted}>Ostatni zapis do serwera: {locationDiagnostics.lastUploadAt?new Date(locationDiagnostics.lastUploadAt).toLocaleString('pl-PL'):'brak potwierdzonego zapisu'}</Text>
         {locationDiagnostics.lastTaskError&&<Text style={S.muted}>Błąd zadania: {locationDiagnostics.lastTaskError}</Text>}
+        {locationDiagnostics.lastTaskLocationProcessError&&<Text style={S.muted}>Błąd obsługi pomiaru: {locationDiagnostics.lastTaskLocationProcessError}</Text>}
         {locationDiagnostics.lastUploadError&&<Text style={S.muted}>Błąd wysyłania: {locationDiagnostics.lastUploadError}</Text>}
       </View></View>
       <Text style={S.section}>🏭 Kalibracja stref magazynów</Text>
