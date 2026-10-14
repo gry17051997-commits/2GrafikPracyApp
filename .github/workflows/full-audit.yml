@@ -46,11 +46,16 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Validate CI patch scripts
+      - name: Run application regression tests and syntax checks
         run: |
-          node --check scripts/fix-app-build.js
-          node --check scripts/fix-chat-build.js
-          node --check scripts/fix-rotation-switch.js
+          node --check App.js
+          node --check AppRuntime.js
+          node --check index.js
+          node --check LocationService.js
+          node --check LiveLocationDashboard.js
+          node --check apiClient.js
+          node --check scheduleEngine.js
+          npm test
 
       - name: Validate Expo configuration
         run: npx expo config --type public
