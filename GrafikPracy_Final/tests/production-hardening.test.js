@@ -280,15 +280,26 @@ test('central API configuration is enabled and Firebase packages are absent', ()
   assert.doesNotMatch(lock, /"node_modules\/firebase"/);
 });
 
-test('public registration cannot grant admin through a first-user race', () => {
+test('public registration always creates a least-privilege employee account', () => {
   const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
   const start = server.indexOf("app.post('/api/auth/register'");
-  const end = server.indexOf("\\napp.post('/api/auth/login'", start);
+  const end = server.indexOf("app.post('/api/auth/login'", start);
   assert.ok(start >= 0 && end > start);
   const route = server.slice(start, end);
-  assert.match(route, /BOOTSTRAP_ADMIN_EMAIL/);
-  assert.match(route, /email===bootstrapAdminEmail\?'admin':'employee'/);
-  assert.doesNotMatch(route, /SELECT COUNT\(\*\)::int AS n FROM users/);
+  assert.match(route, /const role='employee'/);
+  assert.doesNotMatch(route, /BOOTSTRAP_ADMIN_EMAIL|SELECT COUNT\(\*\)::int AS n FROM users|role='admin'/);
+});
+
+test('document store authorization denies unknown collection access by default', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const readStart = server.indexOf('function canStoreRead(');
+  const writeStart = server.indexOf('function canStoreWrite(', readStart);
+  const collectionStart = server.indexOf('function assertCollectionName(', writeStart);
+  const readBlock = server.slice(readStart, writeStart);
+  const writeBlock = server.slice(writeStart, collectionStart);
+  assert.match(readBlock, /return false;/);
+  assert.match(writeBlock, /return false;/);
+  assert.match(readBlock, /name==='chatMessages'\|\|name==='schedules'\|\|name==='settings'\|\|name==='warehouseZones'/);
 });
 
 test('release APK build has a safe fallback for the central API URL', () => {
