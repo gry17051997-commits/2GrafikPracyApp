@@ -453,6 +453,24 @@ app.use((err,_req,res,_next)=>{
   res.status(500).json({error:'INTERNAL_SERVER_ERROR'});
 });
 
+
+async function bootstrapAdminFromEnvironment(){
+  const email=String(process.env.ADMIN_BOOTSTRAP_EMAIL||'').trim().toLowerCase();
+  const password=String(process.env.ADMIN_BOOTSTRAP_PASSWORD||'');
+  if(!email&&!password)return false;
+  if(!validEmail(email)||password.length<12)throw new Error('ADMIN_BOOTSTRAP_CONFIGURATION_INVALID');
+  const existingAdmin=await q("SELECT id FROM users WHERE role='admin' LIMIT 1");
+  if(existingAdmin.rows[0])return false;
+  const existingUser=await q('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1',[email]);
+  if(existingUser.rows[0]){
+    await q("UPDATE users SET role='admin',person_key='',disabled=false,password_hash=$1,updated_at=NOW() WHERE id=$2",[hashPassword(password),existingUser.rows[0].id]);
+  }else{
+    await q("INSERT INTO users(id,email,password_hash,display_name,person_key,role,disabled) VALUES($1,$2,$3,$4,'','admin',false)",[id(),email,hashPassword(password),email.split('@')[0]||'Administrator']);
+  }
+  console.log('Initial administrator provisioned from ADMIN_BOOTSTRAP_EMAIL.');
+  return true;
+}
+
 async function cleanupGpsHistory(){
   try{const result=await q("DELETE FROM gps_history WHERE observed_at < NOW()-INTERVAL '7 days'");console.log('GPS history cleanup',result.rowCount);}
   catch(error){console.error('GPS history cleanup failed',error);}
@@ -464,6 +482,7 @@ async function bootstrap(){
   if(process.env.DATABASE_URL){
     const schema=await readFile(new URL('./schema.sql',import.meta.url),'utf8');
     for(const statement of schema.split(';').map(x=>x.trim()).filter(Boolean))await q(statement);
+    await bootstrapAdminFromEnvironment();
     await cleanupGpsHistory();
   }
   app.listen(PORT,()=>console.log('Grafik Pracy central API listening on '+PORT));

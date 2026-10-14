@@ -1324,7 +1324,11 @@ export default function App() {
       setAuthPassword('');
       setCloudReady(true);
     }catch(e){
-      setCloudError(e?.code==='INVALID_CREDENTIALS'?'Nieprawidłowy e-mail lub hasło.':'Nie udało się zalogować do centralnego serwera.');
+      if(e?.code==='INVALID_CREDENTIALS')setCloudError('Nieprawidłowy e-mail/hasło albo konto jest wyłączone.');
+      else if(e?.status===403)setCloudError('Konto nie ma wymaganych uprawnień.');
+      else if(e?.status>=500)setCloudError('Centralny serwer zgłosił błąd. Spróbuj ponownie później.');
+      else if(String(e?.message||'').includes('EXPO_PUBLIC_API_URL'))setCloudError('Aplikacja nie ma skonfigurowanego adresu centralnego API.');
+      else setCloudError('Nie można połączyć się z centralnym serwerem. Sprawdź internet i spróbuj ponownie.');
     }finally{setAuthBusy(false);}
   };
 

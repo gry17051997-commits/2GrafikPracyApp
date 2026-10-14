@@ -510,3 +510,21 @@ test('proposal approval and rejection are performed by atomic central API transa
   assert.ok(app.includes("api('/proposals/'+encodeURIComponent(proposal.id)+'/approve'"));
   assert.ok(app.includes("api('/proposals/'+encodeURIComponent(id)+'/reject'"));
 });
+
+
+test('initial admin bootstrap is private, environment-gated, and never overrides an existing administrator', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(server.includes('async function bootstrapAdminFromEnvironment()'));
+  assert.ok(server.includes('ADMIN_BOOTSTRAP_EMAIL'));
+  assert.ok(server.includes('ADMIN_BOOTSTRAP_PASSWORD'));
+  assert.ok(server.includes("SELECT id FROM users WHERE role='admin' LIMIT 1"));
+  assert.ok(server.includes('await bootstrapAdminFromEnvironment();'));
+  assert.ok(!server.includes("const role=Number(count.rows[0].n)===0?'admin':'employee'"));
+});
+
+test('login errors distinguish invalid credentials from server and network failures', () => {
+  const app = fs.readFileSync(new URL('../AppRuntime.js', import.meta.url), 'utf8');
+  assert.ok(app.includes('Nieprawidłowy e-mail/hasło albo konto jest wyłączone.'));
+  assert.ok(app.includes('Centralny serwer zgłosił błąd.'));
+  assert.ok(app.includes('Nie można połączyć się z centralnym serwerem.'));
+});
