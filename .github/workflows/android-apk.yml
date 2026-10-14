@@ -18,18 +18,16 @@ concurrency:
 
 env:
   EXPO_NO_DOCTOR: "1"
+  EXPO_NO_TELEMETRY: "1"
   CI: "1"
+  EXPO_PUBLIC_API_URL: https://grafik-pracy-api-fra.onrender.com
+  EXPO_PUBLIC_MAPTILER_KEY: ${{ secrets.EXPO_PUBLIC_MAPTILER_KEY }}
 
 jobs:
-  runtime_test:
-    name: Runtime TEST ${{ matrix.test }}
+  runtime_smoke:
+    name: Real app Android emulator smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        test: [1, 2, 3, 4]
-
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: GrafikPracy_Final
@@ -51,109 +49,33 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: npm ci --ignore-scripts
 
-      - name: Select controlled App.js test
-        env:
-          TEST_ID: ${{ matrix.test }}
+      - name: Static checks and regression suite
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
+          node --check App.js
+          node --check AppRuntime.js
+          node --check index.js
+          node --check LocationService.js
+          node --check LiveLocationDashboard.js
+          node --check apiClient.js
+          node --check scheduleEngine.js
+          npm test
 
-          test = os.environ["TEST_ID"]
+      - name: Validate Expo configuration
+        run: npx expo config --type public
 
-          common = """import React from 'react';
-          import { View, Text, StyleSheet } from 'react-native';
-
-          const S = StyleSheet.create({
-            root: { flex: 1, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', padding: 20 },
-            text: { color: '#fff', fontSize: 28, fontWeight: '900', textAlign: 'center' },
-            sub: { color: '#9db9ff', fontSize: 14, marginTop: 8, textAlign: 'center' }
-          });
-          """
-
-          tests = {
-            "1": common + """
-          export default function App() {
-            return <View style={S.root}>
-              <Text style={S.text}>TEST 1: ENTRY POINT</Text>
-              <Text style={S.sub}>Native + JS render OK</Text>
-            </View>;
-          }
-          """,
-            "2": common + """
-          import { CENTRAL_API_ENABLED, auth, db } from './firebaseConfig';
-          import { API_BASE_URL } from './apiClient';
-
-          export default function App() {
-            return <View style={S.root}>
-              <Text style={S.text}>TEST 2: CENTRAL API</Text>
-              <Text style={S.sub}>Central API module: OK</Text>
-              <Text style={S.sub}>API URL: {API_BASE_URL ? 'SET' : 'NOT SET IN CI'}</Text>
-            </View>;
-          }
-          """,
-            "3": common + """
-          import { CENTRAL_API_ENABLED } from './firebaseConfig';
-          import './LocationService';
-          import { API_BASE_URL } from './apiClient';
-
-          export default function App() {
-            return <View style={S.root}>
-              <Text style={S.text}>TEST 3: LOCATION</Text>
-              <Text style={S.sub}>LocationService loaded OK</Text>
-              <Text style={S.sub}>Central API module: OK</Text>
-              <Text style={S.sub}>API URL: {API_BASE_URL ? 'SET' : 'NOT SET IN CI'}</Text>
-            </View>;
-          }
-          """,
-            "4": common + """
-          import AsyncStorage from '@react-native-async-storage/async-storage';
-          import * as Sharing from 'expo-sharing';
-          import * as Print from 'expo-print';
-          import * as Notifications from 'expo-notifications';
-          import * as Clipboard from 'expo-clipboard';
-          import { captureRef } from 'react-native-view-shot';
-          import * as Location from 'expo-location';
-          import { CENTRAL_API_ENABLED } from './firebaseConfig';
-          import './LocationService';
-          import { API_BASE_URL } from './apiClient';
-
-          Notifications.setNotificationHandler({
-            handleNotification: async () => ({
-              shouldShowBanner: true,
-              shouldShowList: true,
-              shouldPlaySound: true,
-              shouldSetBadge: false
-            })
-          });
-
-          export default function App() {
-            return <View style={S.root}>
-              <Text style={S.text}>TEST 4: ALL IMPORTS</Text>
-              <Text style={S.sub}>All imports loaded</Text>
-              <Text style={S.sub}>Firebase: {CENTRAL_API_ENABLED ? 'OK' : 'FAIL'}</Text>
-              <Text style={S.sub}>AsyncStorage: OK</Text>
-              <Text style={S.sub}>Notifications: OK</Text>
-            </View>;
-          }
-          """
-          }
-
-          Path("App.js").write_text(tests[test], encoding="utf-8")
-          PY
-
-      - name: Verify selected source
+      - name: Apply deterministic build transforms
         run: |
-          echo "=== TEST ${{ matrix.test }} App.js ==="
-          sed -n '1,220p' App.js
+          node scripts/fix-app-build.js
+          node scripts/fix-chat-build.js
+          node scripts/fix-rotation-switch.js
 
-      - name: Generate native Android project
+      - name: Generate Android native project
         run: npx expo prebuild --platform android --no-install --non-interactive
 
-      - name: Configure embedded JS bundling
+      - name: Configure embedded JavaScript bundle
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -170,9 +92,17 @@ jobs:
           path.write_text(text.replace(marker, block, 1))
           PY
 
-      - name: Build APK
+      - name: Build APK from the real application
         working-directory: GrafikPracy_Final/android
         run: ./gradlew assembleDebug --no-daemon --console=plain --max-workers=2
+
+      - name: Verify APK and embedded bundle
+        run: |
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -E 'assets/.+\.hbc|assets/.+\.bundle|index.android.bundle'
+          sha256sum "$APK"
 
       - name: Enable KVM
         run: |
@@ -181,9 +111,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           sudo usermod -aG kvm "$USER"
           ls -l /dev/kvm
-          groups
 
-      - name: Start Android emulator and run app
+      - name: Install and launch the real app on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -194,33 +123,52 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: |
-            set -e
+            set -euo pipefail
+            APK="$GITHUB_WORKSPACE/GrafikPracy_Final/android/app/build/outputs/apk/debug/app-debug.apk"
             adb wait-for-device
-            adb install -r "$GITHUB_WORKSPACE/GrafikPracy_Final/android/app/build/outputs/apk/debug/app-debug.apk"
+            adb install -r "$APK"
+            adb shell pm grant pl.grafikpracy.app android.permission.ACCESS_COARSE_LOCATION || true
+            adb shell pm grant pl.grafikpracy.app android.permission.ACCESS_FINE_LOCATION || true
             adb logcat -c
             adb shell monkey -p pl.grafikpracy.app 1
-            sleep 8
-            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1
-            adb pull /sdcard/window.xml "$GITHUB_WORKSPACE/runtime-window.xml" >/dev/null 2>&1
+            sleep 20
+            adb shell uiautomator dump /sdcard/grafik-pracy-window.xml >/dev/null
+            adb pull /sdcard/grafik-pracy-window.xml "$GITHUB_WORKSPACE/runtime-window.xml" >/dev/null
             adb logcat -d > "$GITHUB_WORKSPACE/runtime-logcat.txt"
             adb shell pidof pl.grafikpracy.app > "$GITHUB_WORKSPACE/runtime-pid.txt" || true
-            echo "=== UI DUMP ==="
-            cat "$GITHUB_WORKSPACE/runtime-window.xml" 2>/dev/null || true
-            echo "=== PROCESS ==="
-            cat "$GITHUB_WORKSPACE/runtime-pid.txt" 2>/dev/null || true
-            echo "=== FATAL/ERROR LOGS ==="
-            grep -E "FATAL EXCEPTION|AndroidRuntime|ReactNativeJS|Hermes|Unable to load script|Could not connect|Exception" "$GITHUB_WORKSPACE/runtime-logcat.txt" | tail -200 || true
-            grep -q "TEST ${{ matrix.test }}" "$GITHUB_WORKSPACE/runtime-window.xml"
-            echo "TEST ${{ matrix.test }} UI marker FOUND"
+            adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/runtime-activities.txt"
+            echo "=== APP PROCESS ==="
+            cat "$GITHUB_WORKSPACE/runtime-pid.txt"
+            test -s "$GITHUB_WORKSPACE/runtime-pid.txt"
+            echo "=== REAL APP UI ==="
+            cat "$GITHUB_WORKSPACE/runtime-window.xml"
+            # Assert the real authentication UI was rendered; no test App.js is substituted.
+            grep -Eiq 'ZALOGUJ SIĘ|E-mail|Hasło|Zaloguj się, aby korzystać ze wspólnego grafiku' "$GITHUB_WORKSPACE/runtime-window.xml"
+            echo "REAL APP AUTHENTICATION UI FOUND"
+            echo "=== APP FATAL ERRORS ==="
+            if grep -E 'FATAL EXCEPTION|Unable to load script|ReactNativeJS.*(Error|Exception)|Invariant Violation|TurboModuleRegistry.*could not be found' "$GITHUB_WORKSPACE/runtime-logcat.txt"; then
+              exit 1
+            fi
+            # The embedded app must survive background/foreground transitions.
+            adb shell input keyevent 3
+            sleep 3
+            adb shell monkey -p pl.grafikpracy.app 1
+            sleep 5
+            adb shell pidof pl.grafikpracy.app > "$GITHUB_WORKSPACE/runtime-pid-resumed.txt"
+            test -s "$GITHUB_WORKSPACE/runtime-pid-resumed.txt"
+            adb logcat -d > "$GITHUB_WORKSPACE/runtime-logcat.txt"
+            echo "REAL APP START + RESUME PASSED"
 
-      - name: Upload runtime diagnostics
+      - name: Upload emulator diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-test-${{ matrix.test }}
+          name: real-app-android-emulator-diagnostics
           path: |
-            ${{ github.workspace }}/runtime-logcat.txt
             ${{ github.workspace }}/runtime-window.xml
+            ${{ github.workspace }}/runtime-logcat.txt
             ${{ github.workspace }}/runtime-pid.txt
+            ${{ github.workspace }}/runtime-pid-resumed.txt
+            ${{ github.workspace }}/runtime-activities.txt
           if-no-files-found: warn
           retention-days: 14
