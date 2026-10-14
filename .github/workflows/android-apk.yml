@@ -69,23 +69,6 @@ jobs:
       - name: Generate Android native project
         run: npx expo prebuild --platform android --no-install --non-interactive
 
-      - name: Configure embedded JavaScript bundle
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("android/app/build.gradle")
-          text = path.read_text()
-          marker = "react {\n"
-          if marker not in text:
-              raise SystemExit("React Gradle configuration block not found")
-          block = '''react {
-              cliFile = new File(["node", "--print", "require.resolve('@expo/cli')"].execute(null, rootDir).text.trim())
-              bundleCommand = "export:embed"
-              debuggableVariants = []
-          '''
-          path.write_text(text.replace(marker, block, 1))
-          PY
-
       - name: Build APK from the real application
         working-directory: GrafikPracy_Final/android
         run: ./gradlew assembleDebug --no-daemon --console=plain --max-workers=2
@@ -117,7 +100,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: |
-            set -euo pipefail
+            set -eu
             APK="$GITHUB_WORKSPACE/GrafikPracy_Final/android/app/build/outputs/apk/debug/app-debug.apk"
             adb wait-for-device
             adb install -r "$APK"
