@@ -293,7 +293,7 @@ test('public registration cannot grant admin through a first-user race', () => {
 
 test('release APK build has a safe fallback for the central API URL', () => {
   const workflow = fs.readFileSync(new URL('../../.github/workflows/build-apk.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /secrets\\.EXPO_PUBLIC_API_URL \\|\\| 'https:\\/\\/grafik-pracy-api-fra\\.onrender\\.com'/);
+  assert.ok(workflow.includes("secrets.EXPO_PUBLIC_API_URL || 'https://grafik-pracy-api-fra.onrender.com'"));
 });
 
 test('central backend protects document writes with revision checks', () => {
