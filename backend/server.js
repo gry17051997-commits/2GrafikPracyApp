@@ -157,7 +157,7 @@ app.delete('/api/users/:uid',auth,admin,async(req,res)=>{
   res.json({ok:true});
 });
 
-app.get('/api/vehicles',auth,async(_req,res)=>{
+app.get('/api/vehicles',auth,admin,async(_req,res)=>{
   const r=await q('SELECT * FROM vehicles ORDER BY registration');
   res.json({vehicles:r.rows});
 });
@@ -202,7 +202,7 @@ app.delete('/api/phones/:id',auth,admin,async(req,res)=>{
   res.json({ok:true});
 });
 
-app.get('/api/assignments',auth,async(_req,res)=>{
+app.get('/api/assignments',auth,admin,async(_req,res)=>{
   const r=await q('SELECT a.*,v.registration,v.name AS vehicle_name,p.name AS phone_name,u.display_name AS user_name FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id JOIN phones p ON p.id=a.phone_id LEFT JOIN users u ON u.id=a.user_id WHERE a.active=true ORDER BY v.registration');
   res.json({assignments:r.rows});
 });
