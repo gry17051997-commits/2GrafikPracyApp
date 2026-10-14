@@ -445,3 +445,10 @@ test('GPS fleet and history endpoints restrict employee access to assigned vehic
   assert.match(historyRoute, /GPS_VEHICLE_FORBIDDEN/);
   assert.match(historyRoute, /a\.user_id=\$1 AND a\.vehicle_id=\$2 AND a\.active=true/);
 });
+
+
+test('fleet inventory and assignment endpoints require administrator authorization', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(server.includes("app.get('/api/vehicles',auth,admin,async("));
+  assert.ok(server.includes("app.get('/api/assignments',auth,admin,async("));
+});
