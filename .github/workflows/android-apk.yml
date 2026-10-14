@@ -66,12 +66,6 @@ jobs:
       - name: Validate Expo configuration
         run: npx expo config --type public
 
-      - name: Apply deterministic build transforms
-        run: |
-          node scripts/fix-app-build.js
-          node scripts/fix-chat-build.js
-          node scripts/fix-rotation-switch.js
-
       - name: Generate Android native project
         run: npx expo prebuild --platform android --no-install --non-interactive
 
