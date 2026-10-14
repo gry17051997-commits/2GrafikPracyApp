@@ -69,7 +69,6 @@ CREATE TABLE IF NOT EXISTS gps_history (
 );
 
 ALTER TABLE gps_history ADD COLUMN IF NOT EXISTS sample_id TEXT;
-DROP INDEX IF EXISTS gps_history_sample_id_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS gps_history_sample_id_idx ON gps_history(vehicle_id,sample_id) WHERE sample_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS gps_history_vehicle_time_idx ON gps_history(vehicle_id, observed_at DESC);
 
