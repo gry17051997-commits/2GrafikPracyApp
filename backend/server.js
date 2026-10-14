@@ -55,7 +55,8 @@ function canStoreRead(name,user,payload={}){
   if(name==='audit')return user.role==='admin';
   if(name==='proposals')return user.role==='admin'||payload.fromUid===user.id;
   if(name==='whatsappReports')return user.role==='admin'||payload.uid===user.id;
-  return true;
+  if(name==='chatMessages'||name==='schedules'||name==='settings'||name==='warehouseZones')return true;
+  return false;
 }
 function canStoreWrite(name,user,payload={},existing=null){
   if(name==='audit')return false;
@@ -65,7 +66,7 @@ function canStoreWrite(name,user,payload={},existing=null){
   if(name==='chatMessages')return user.role==='admin'||(!existing&&payload.uid===user.id);
   if(name==='whatsappReports')return user.role==='admin'||(!existing&&payload.uid===user.id);
   if(name==='users')return user.role==='admin';
-  return true;
+  return false;
 }
 
 function assertCollectionName(v){
@@ -83,10 +84,9 @@ app.post('/api/auth/register',async(req,res)=>{
   const password=String(req.body?.password||'');
   const displayName=String(req.body?.displayName||email.split('@')[0]||'').trim();
   if(!validEmail(email)||password.length<6||password.length>128||displayName.length<2||displayName.length>100)return res.status(400).json({error:'INVALID_REGISTRATION'});
-  // Public registration must never grant admin based on a racy user count.
-  // Only an explicitly provisioned bootstrap email may receive the admin role.
-  const bootstrapAdminEmail=String(process.env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase();
-  const role=bootstrapAdminEmail && email===bootstrapAdminEmail?'admin':'employee';
+  // Public registration never grants privileged roles. Provision the first administrator
+  // through a trusted database/admin bootstrap operation, not an unauthenticated signup.
+  const role='employee';
   try{
     const uid=id();
     const r=await q('INSERT INTO users(id,email,password_hash,display_name,role) VALUES($1,$2,$3,$4,$5) RETURNING *',[uid,email,hashPassword(password),displayName,role]);
