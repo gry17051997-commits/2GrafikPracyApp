@@ -50,12 +50,6 @@ jobs:
           test -n "$EXPO_PUBLIC_API_URL"
           echo "Central API URL configured."
 
-      - name: Apply deterministic build fixes
-        run: |
-          node scripts/fix-app-build.js
-          node scripts/fix-chat-build.js
-          node scripts/fix-rotation-switch.js
-
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --non-interactive
 
