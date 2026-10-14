@@ -461,9 +461,14 @@ async function bootstrapAdminFromEnvironment(){
   if(!validEmail(email)||password.length<12)throw new Error('ADMIN_BOOTSTRAP_CONFIGURATION_INVALID');
   const existingAdmin=await q("SELECT id FROM users WHERE role='admin' LIMIT 1");
   if(existingAdmin.rows[0])return false;
-  const existingUser=await q('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1',[email]);
+  const existingUser=await q('SELECT id,password_hash,disabled FROM users WHERE lower(email)=lower($1) LIMIT 1',[email]);
   if(existingUser.rows[0]){
-    await q("UPDATE users SET role='admin',person_key='',disabled=false,password_hash=$1,updated_at=NOW() WHERE id=$2",[hashPassword(password),existingUser.rows[0].id]);
+    // Never silently reset credentials or reactivate a disabled account during service startup.
+    // Existing users can be promoted only when the supplied bootstrap password already matches.
+    if(existingUser.rows[0].disabled||!verifyPassword(password,existingUser.rows[0].password_hash)){
+      throw new Error('ADMIN_BOOTSTRAP_EXISTING_ACCOUNT_MISMATCH');
+    }
+    await q("UPDATE users SET role='admin',person_key='',updated_at=NOW() WHERE id=$1",[existingUser.rows[0].id]);
   }else{
     await q("INSERT INTO users(id,email,password_hash,display_name,person_key,role,disabled) VALUES($1,$2,$3,$4,'','admin',false)",[id(),email,hashPassword(password),email.split('@')[0]||'Administrator']);
   }
