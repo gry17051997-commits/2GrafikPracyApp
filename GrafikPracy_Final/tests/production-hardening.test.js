@@ -487,3 +487,13 @@ test('GPS history uploads are idempotent and the pending queue is persisted befo
   assert.ok(server.includes('ON CONFLICT (sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
   assert.ok(service.includes("Number(previous?.observedAt||0)>Number(payload.observedAt||0)"));
 });
+
+
+test('offline GPS samples cannot be assigned to a different vehicle after a reassignment', () => {
+  const service = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(service.includes('assignedVehicleId:cfg.assignedVehicleServerId||null'));
+  assert.ok(service.includes("String(lastError?.message||lastError)==='GPS_ASSIGNMENT_CHANGED'"));
+  assert.ok(server.includes("if(b.assignedVehicleId&&String(b.assignedVehicleId)!==String(v.id))return res.status(409).json({error:'GPS_ASSIGNMENT_CHANGED'})"));
+  assert.ok(server.includes('ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
+});

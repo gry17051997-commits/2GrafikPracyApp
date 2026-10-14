@@ -2694,6 +2694,7 @@ const settings = (
         <Text style={S.muted}>Ostatni pomiar lokalny: {locationDiagnostics.lastTaskAt?new Date(locationDiagnostics.lastTaskAt).toLocaleString('pl-PL'):'brak pomiaru zadania w tle'}</Text>
         <Text style={S.muted}>Ostatnia próba wysyłki: {locationDiagnostics.lastUploadAttemptAt?new Date(locationDiagnostics.lastUploadAttemptAt).toLocaleString('pl-PL'):'brak danych'}</Text>
         <Text style={S.muted}>Ostatni zapis do serwera: {locationDiagnostics.lastUploadAt?new Date(locationDiagnostics.lastUploadAt).toLocaleString('pl-PL'):'brak potwierdzonego zapisu'}</Text>
+        <Text style={S.muted}>Punkty oczekujące na wysłanie: {Number(locationDiagnostics.pendingUploadCount||0)}</Text>
         {locationDiagnostics.lastTaskError&&<Text style={S.muted}>Błąd zadania: {locationDiagnostics.lastTaskError}</Text>}
         {locationDiagnostics.lastTaskLocationProcessError&&<Text style={S.muted}>Błąd obsługi pomiaru: {locationDiagnostics.lastTaskLocationProcessError}</Text>}
         {locationDiagnostics.lastUploadError&&<Text style={S.muted}>Błąd wysyłania: {locationDiagnostics.lastUploadError}</Text>}

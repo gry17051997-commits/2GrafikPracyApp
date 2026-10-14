@@ -110,7 +110,14 @@ async function flushPendingGpsQueue(deviceToken,cfg){
     let result=null,lastError=null;
     for(let attempt=0;attempt<3;attempt++){
       try{result=await apiPostGps(sample,deviceToken);lastError=null;break;}
-      catch(error){lastError=error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));}
+      catch(error){lastError=error;if(String(error?.message||error)==='GPS_ASSIGNMENT_CHANGED')break;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));}
+    }
+    if(!result&&String(lastError?.message||lastError)==='GPS_ASSIGNMENT_CHANGED'){
+      queue=queue.slice(1);
+      await writePendingGpsQueue(queue);
+      await patchDiagnostics({lastStaleAssignmentSampleDroppedAt:Date.now(),lastStaleAssignmentSampleObservedAt:sample.observedAt,lastUploadError:null});
+      uploaded++;
+      continue;
     }
     if(!result){
       const message=String(lastError?.message||lastError||'unknown');
@@ -132,7 +139,8 @@ async function saveLocationInternal(location){
   const c=location.coords,now=Date.now(),observedAt=Number(location.timestamp||now);
   if(!Number.isFinite(Number(c.latitude))||!Number.isFinite(Number(c.longitude))||!Number.isFinite(observedAt))return;
   const payload={
-    sampleId:String(Math.round(observedAt))+'-'+Number(c.latitude).toFixed(6)+'-'+Number(c.longitude).toFixed(6),
+    sampleId:String(cfg.assignedVehicleServerId||'unassigned')+'-'+String(Math.round(observedAt))+'-'+Number(c.latitude).toFixed(6)+'-'+Number(c.longitude).toFixed(6),
+    assignedVehicleId:cfg.assignedVehicleServerId||null,
     latitude:Number(c.latitude),
     longitude:Number(c.longitude),
     accuracy:Number.isFinite(Number(c.accuracy))?Number(c.accuracy):null,
@@ -202,7 +210,7 @@ export async function startVehicleLocationTracking({vehicleId,registration}={}){
   const bg=await Location.requestBackgroundPermissionsAsync();
   if(bg.status!=='granted')return {ok:false,reason:'background-permission'};
   const old=await getConfig();
-  await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...old,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),registration:assignment.registration||registration||''}));
+  await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...old,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),assignedVehicleServerId:assignment.vehicleId,registration:assignment.registration||registration||''}));
   const alreadyRunning=await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
   if(alreadyRunning && old.optionsVersion!==LOCATION_OPTIONS_VERSION){
     await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
@@ -259,8 +267,8 @@ export async function ensureVehicleLocationTracking(){
     await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME,LOCATION_OPTIONS);
     restarted=true;
   }
-  if(!running || Number(cfg.optionsVersion||0)!==LOCATION_OPTIONS_VERSION){
-    await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...cfg,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),registration:assignment.registration||cfg.registration||''}));
+  if(!running || Number(cfg.optionsVersion||0)!==LOCATION_OPTIONS_VERSION || cfg.assignedVehicleServerId!==assignment.vehicleId){
+    await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...cfg,enabled:true,optionsVersion:LOCATION_OPTIONS_VERSION,vehicleId:normalizeVehicleId(assignment.vehicleId),assignedVehicleServerId:assignment.vehicleId,registration:assignment.registration||cfg.registration||''}));
   }
   try{await saveLocation(await Location.getCurrentPositionAsync({accuracy:Location.Accuracy.High}));}catch(e){console.log('LOCATION_REFRESH_ERROR',e);}
   return {ok:true,restarted,vehicleId:assignment.vehicleId,registration:assignment.registration||''};
