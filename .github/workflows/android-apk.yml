@@ -79,8 +79,8 @@ jobs:
           test -s "$APK"
           unzip -t "$APK" >/dev/null
           unzip -Z1 "$APK" > "$RUNNER_TEMP/apk-entries.txt"
-          grep -Eq '^classes[0-9]*\\.dex$' "$RUNNER_TEMP/apk-entries.txt"
-          grep -Eq '(^|/)index\\.android\\.bundle$|^assets/.*\\.(hbc|bundle)$' "$RUNNER_TEMP/apk-entries.txt"
+          grep -Eq '^classes[0-9]*\.dex$' "$RUNNER_TEMP/apk-entries.txt"
+          grep -Eq '(^|/)index\.android\.bundle$|^assets/.*\.(hbc|bundle)$' "$RUNNER_TEMP/apk-entries.txt"
           sha256sum "$APK"
 
       - name: Enable KVM
