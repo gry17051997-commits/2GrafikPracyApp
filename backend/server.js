@@ -233,6 +233,73 @@ app.post('/api/assignments',auth,admin,async(req,res)=>{
   }finally{client.release();}
 });
 
+
+app.post('/api/proposals/:proposalId/approve',auth,admin,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const proposalResult=await client.query("SELECT payload,revision FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE",[String(req.params.proposalId)]);
+    if(!proposalResult.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'PROPOSAL_NOT_FOUND'});}
+    const proposal=proposalResult.rows[0].payload||{};
+    if(proposal.status!=='pending'){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_NOT_PENDING'});}
+    const weekKey=String(proposal.weekKey||'');
+    const match=weekKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!match){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_WEEK'});}
+    const weekStart=new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3])));
+    if(Number.isNaN(weekStart.getTime())||weekStart.toISOString().slice(0,10)!==weekKey||weekStart.getUTCDay()!==1){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_WEEK'});}
+    const fromDay=Number(proposal.fromDay),toDay=Number(proposal.toDay),fromShift=Number(proposal.fromShift),toShift=Number(proposal.toShift);
+    if(!Number.isInteger(fromDay)||!Number.isInteger(toDay)||fromDay<0||fromDay>6||toDay<0||toDay>6||!Number.isInteger(fromShift)||!Number.isInteger(toShift)||fromShift<1||fromShift>2||toShift<1||toShift>2||(fromDay===toDay&&fromShift===toShift)){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_SHIFTS'});}
+    const localToday=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const dateForOffset=offset=>{const d=new Date(weekStart);d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10);};
+    if(dateForOffset(fromDay)<localToday||dateForOffset(toDay)<localToday){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_DATE_PASSED'});}
+    const scheduleResult=await client.query("SELECT payload,revision FROM documents WHERE collection_name='schedules' AND doc_id=$1 FOR UPDATE",[weekKey]);
+    if(!scheduleResult.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'SCHEDULE_NOT_FOUND'});}
+    const schedule=scheduleResult.rows[0].payload||{};
+    const shifts=schedule.shifts&&typeof schedule.shifts==='object'&&!Array.isArray(schedule.shifts)?{...schedule.shifts}:{};
+    if(!Object.keys(shifts).length&&Array.isArray(schedule.week)){
+      schedule.week.forEach((day,di)=>(day?.shifts||[]).forEach((shift,si)=>{
+        shifts['shift_'+dateForOffset(di)+'_'+(si+1)]={...shift,id:shift.id||di+'-'+(si+1),shift:si+1,person:shift.person||null,warehouse:shift.warehouse||day.warehouse||''};
+      }));
+    }
+    const fromKey='shift_'+dateForOffset(fromDay)+'_'+fromShift,toKey='shift_'+dateForOffset(toDay)+'_'+toShift;
+    const from=shifts[fromKey],to=shifts[toKey];
+    const expectedFrom=proposal.fromExpectedPerson??proposal.fromPerson??null,expectedTo=proposal.toExpectedPerson??proposal.toPerson??null;
+    if(!from||!to||from.person!==expectedFrom||to.person!==expectedTo||from.locked===true||to.locked===true){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_STALE'});}
+    shifts[fromKey]={...from,person:to.person||null,manual:true};
+    shifts[toKey]={...to,person:from.person||null,manual:true};
+    const approvedAt=new Date().toISOString();
+    const nextSchedule={...schedule,weekId:weekKey,shifts,updatedAt:approvedAt,updatedBy:req.user.id};
+    const nextProposal={...proposal,status:'approved',approvedAt,approvedBy:req.user.id};
+    const updatedSchedule=await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='schedules' AND doc_id=$3 RETURNING revision",[JSON.stringify(nextSchedule),req.user.id,weekKey]);
+    await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='proposals' AND doc_id=$3",[JSON.stringify(nextProposal),req.user.id,String(req.params.proposalId)]);
+    await client.query('COMMIT');
+    res.json({ok:true,schedule:nextSchedule,revision:Number(updatedSchedule.rows[0]?.revision||0),proposal:nextProposal});
+  }catch(error){
+    try{await client.query('ROLLBACK');}catch{}
+    console.error('Proposal approval failed',error);
+    res.status(500).json({error:'PROPOSAL_APPROVAL_FAILED'});
+  }finally{client.release();}
+});
+app.post('/api/proposals/:proposalId/reject',auth,admin,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const found=await client.query("SELECT payload FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE",[String(req.params.proposalId)]);
+    if(!found.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'PROPOSAL_NOT_FOUND'});}
+    const proposal=found.rows[0].payload||{};
+    if(proposal.status!=='pending'){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_NOT_PENDING'});}
+    const rejectedAt=new Date().toISOString();
+    const next={...proposal,status:'rejected',rejectedAt,rejectedBy:req.user.id};
+    await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='proposals' AND doc_id=$3",[JSON.stringify(next),req.user.id,String(req.params.proposalId)]);
+    await client.query('COMMIT');
+    res.json({ok:true,proposal:next});
+  }catch(error){
+    try{await client.query('ROLLBACK');}catch{}
+    console.error('Proposal rejection failed',error);
+    res.status(500).json({error:'PROPOSAL_REJECTION_FAILED'});
+  }finally{client.release();}
+});
+
 async function deviceVehicle(token){
   const r=await q('SELECT v.* FROM phones p JOIN assignments a ON a.phone_id=p.id AND a.active=true JOIN vehicles v ON v.id=a.vehicle_id WHERE p.device_token_hash=$1 AND p.active=true AND v.active=true',[hashToken(token)]);
   return r.rows[0];

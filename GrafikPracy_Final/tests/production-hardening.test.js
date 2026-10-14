@@ -497,3 +497,16 @@ test('offline GPS samples cannot be assigned to a different vehicle after a reas
   assert.ok(server.includes("if(b.assignedVehicleId&&String(b.assignedVehicleId)!==String(v.id))return res.status(409).json({error:'GPS_ASSIGNMENT_CHANGED'})"));
   assert.ok(server.includes('ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
 });
+
+
+test('proposal approval and rejection are performed by atomic central API transactions', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../AppRuntime.js', import.meta.url), 'utf8');
+  assert.ok(server.includes("app.post('/api/proposals/:proposalId/approve',auth,admin,async"));
+  assert.ok(server.includes("app.post('/api/proposals/:proposalId/reject',auth,admin,async"));
+  assert.ok(server.includes("SELECT payload,revision FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE"));
+  assert.ok(server.includes("SELECT payload,revision FROM documents WHERE collection_name='schedules' AND doc_id=$1 FOR UPDATE"));
+  assert.ok(server.includes("await client.query('COMMIT')"));
+  assert.ok(app.includes("api('/proposals/'+encodeURIComponent(proposal.id)+'/approve'"));
+  assert.ok(app.includes("api('/proposals/'+encodeURIComponent(id)+'/reject'"));
+});

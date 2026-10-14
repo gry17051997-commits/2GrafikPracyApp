@@ -1807,34 +1807,10 @@ export default function App() {
     }
     try {
       if(CENTRAL_API_ENABLED && db) {
-        const proposalRef=doc(db,'proposals',proposal.id);
-        const scheduleRef=doc(db,'schedules',proposalWeekKey);
-        const committedWeek=await runTransaction(db,async tx=>{
-          const proposalSnap=await tx.get(proposalRef);
-          if(!proposalSnap.exists() || proposalSnap.data()?.status !== 'pending') {
-            throw new Error('proposal-not-pending');
-          }
-          const scheduleSnap=await tx.get(scheduleRef);
-          if(!scheduleSnap.exists()) throw new Error('schedule-missing');
-          const scheduleData=scheduleSnap.data() || {};
-          const currentMap=scheduleData.shifts && typeof scheduleData.shifts === 'object'
-            ? scheduleData.shifts
-            : weekToShiftMap(scheduleData.week || [],proposalWeekKey);
-          const source=shiftMapToWeek(currentMap,proposalWeek,proposalWeekKey);
-          const x=source?.[fromDay]?.shifts?.[fromShift-1];
-          const y=source?.[toDay]?.shifts?.[toShift-1];
-          if(!x || !y || x.person!==expectedA || y.person!==expectedB || x.locked || y.locked) {
-            throw new Error('proposal-stale');
-          }
-          const next=cloneWeek(source);
-          const nx=next[fromDay].shifts[fromShift-1], ny=next[toDay].shifts[toShift-1];
-          const xp=nx.person; nx.person=ny.person; ny.person=xp; nx.manual=true; ny.manual=true;
-          const nextMap=weekToShiftMap(next,proposalWeekKey);
-          tx.update(scheduleRef,{shifts:nextMap,updatedAt:serverTimestamp(),updatedBy:cloudUser?.uid||null});
-          tx.update(proposalRef,{status:'approved',approvedAt:new Date().toISOString(),approvedBy:cloudUser?.uid||null});
-          return next;
-        });
+        const result=await api('/proposals/'+encodeURIComponent(proposal.id)+'/approve',{method:'POST'});
+        const committedWeek=shiftMapToWeek(result.schedule?.shifts,proposalWeek,proposalWeekKey);
         setWeeks(prev=>({...prev,[proposalWeekKey]:committedWeek}));
+        setProposals(prev=>prev.map(item=>item.id===proposal.id?{...item,status:'approved',approvedAt:result.proposal?.approvedAt}:item));
       } else {
         const source=weeks[proposalWeekKey];
         if(!source) throw new Error('schedule-missing');
@@ -1855,12 +1831,8 @@ export default function App() {
     if (readOnly) return;
     try {
       if(CENTRAL_API_ENABLED && db) {
-        const proposalRef=doc(db,'proposals',id);
-        await runTransaction(db,async tx=>{
-          const snap=await tx.get(proposalRef);
-          if(!snap.exists() || snap.data()?.status !== 'pending') throw new Error('proposal-not-pending');
-          tx.update(proposalRef,{status:'rejected',rejectedAt:new Date().toISOString(),rejectedBy:cloudUser?.uid||null});
-        });
+        await api('/proposals/'+encodeURIComponent(id)+'/reject',{method:'POST'});
+        setProposals(prev=>prev.map(item=>item.id===id?{...item,status:'rejected'}:item));
       } else {
         setProposals(p=>p.map(x=>x.id===id && x.status==='pending'?{...x,status:'rejected'}:x));
       }
