@@ -484,7 +484,7 @@ test('GPS history uploads are idempotent and the pending queue is persisted befo
   assert.ok(service.indexOf('await writePendingGpsQueue(queue);') < service.indexOf('await flushPendingGpsQueue(deviceToken,cfg);'));
   assert.ok(service.includes('LOCATION_PENDING_QUEUE_KEY'));
   assert.ok(schema.includes('gps_history_sample_id_idx'));
-  assert.ok(server.includes('ON CONFLICT (sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
+  assert.ok(server.includes('ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
   assert.ok(service.includes("Number(previous?.observedAt||0)>Number(payload.observedAt||0)"));
 });
 
