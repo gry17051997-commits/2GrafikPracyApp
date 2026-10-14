@@ -12,38 +12,41 @@ const distanceMeters=(a,b)=>{if(!a||!b)return Infinity;const R=6371000,p1=a.lati
 const ageText=ts=>{const m=Math.max(0,Math.floor((Date.now()-serverMillis(ts))/60000));if(m<1)return 'przed chwilą';if(m<60)return m+' min temu';return Math.floor(m/60)+' h '+m%60+' min temu';};
 const geocodeAddress=async point=>{const lat=Number(point?.latitude),lon=Number(point?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;try{const res=await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude='+encodeURIComponent(lat)+'&longitude='+encodeURIComponent(lon)+'&localityLanguage=pl',{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),locality=d.city||d.locality||d.principalSubdivision||'',road=d.localityInfo?.informative?.find(x=>/street|road|ulica|droga/i.test(x.description||''))?.name||'';const address=[locality,road].filter(Boolean).join(', ');if(address)return address;}}catch{}try{const res=await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&accept-language=pl&lat='+encodeURIComponent(lat)+'&lon='+encodeURIComponent(lon),{headers:{Accept:'application/json'}});if(res.ok){const d=await res.json(),a=d?.address||{},locality=a.city||a.town||a.village||a.municipality||a.suburb||a.county||'',road=a.road||a.pedestrian||a.residential||a.highway||'',house=a.house_number||'',ref=a.ref||'';return [locality,ref&&ref!==road?ref:'',road+(house?' '+house:'')].filter(Boolean).join(', ')||d.name||null;}}catch{}return null;};
 const mapUrl=loc=>{const lat=Number(loc?.latitude),lon=Number(loc?.longitude);if(!Number.isFinite(lat)||!Number.isFinite(lon))return null;const d=0.006;return 'https://www.openstreetmap.org/export/embed.html?bbox='+(lon-d)+'%2C'+(lat-d)+'%2C'+(lon+d)+'%2C'+(lat+d)+'&layer=mapnik&marker='+lat+'%2C'+lon;};
+const MAX_PLAUSIBLE_SPEED_MPS=55; // ~198 km/h; higher GPS jumps are rejected as measurement outliers.
+const isValidGpsPoint=p=>{
+ const lat=Number(p?.latitude),lon=Number(p?.longitude),accuracy=Number(p?.accuracy);
+ return Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180
+  &&serverMillis(p?.updatedAt)>0&&(!Number.isFinite(accuracy)||accuracy<=100);
+};
 const buildLiveMapData=(current,rows)=>{
- const valid=(rows||[])
-  .filter(p=>Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))&&serverMillis(p.updatedAt)>0)
-  .sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
+ const ordered=(rows||[]).filter(isValidGpsPoint).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
  const segments=[];
  let segment=[],previous=null;
  const flush=()=>{if(segment.length>1)segments.push(segment);segment=[];};
- for(const row of valid){
-  const point={latitude:Number(row.latitude),longitude:Number(row.longitude),speed:Math.max(0,Number(row.speed)||0),time:serverMillis(row.updatedAt)};
+ for(const row of ordered){
+  const point={latitude:Number(row.latitude),longitude:Number(row.longitude),speed:Number(row.speed),accuracy:Number(row.accuracy),time:serverMillis(row.updatedAt)};
   if(previous){
-   const gap=point.time-previous.time;
-   const moved=distanceMeters(previous,point);
-   if(gap<=0||gap>15*60*1000){
+   const gap=point.time-previous.time,moved=distanceMeters(previous,point);
+   const derivedSpeed=gap>0?moved/(gap/1000):Infinity;
+   const reportedSpeed=Number.isFinite(point.speed)&&point.speed>=0?point.speed:0;
+   const speedOutlier=reportedSpeed>MAX_PLAUSIBLE_SPEED_MPS||derivedSpeed>MAX_PLAUSIBLE_SPEED_MPS;
+   if(gap<=0||gap>15*60*1000||speedOutlier){
     flush();
    }else{
-    const derivedSpeed=moved/(gap/1000);
-    const moving=Math.max(point.speed,previous.speed,derivedSpeed)>=1.3888889;
+    const moving=Math.max(reportedSpeed,Number.isFinite(previous.speed)&&previous.speed>=0?previous.speed:0,derivedSpeed)>=1.3888889;
     if(moving){
      if(!segment.length)segment.push([previous.latitude,previous.longitude]);
      if(moved>=3)segment.push([point.latitude,point.longitude]);
-    }else{
-     flush();
-    }
+    }else flush();
    }
   }
   previous=point;
  }
  flush();
+ const currentValid=current&&isValidGpsPoint(current);
+ const currentSpeed=Number(current?.speed);
  return {
-  current:current&&Number.isFinite(Number(current.latitude))&&Number.isFinite(Number(current.longitude))
-   ?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Math.max(0,Number(current.speed)||0),time:serverMillis(current.updatedAt)}
-   :null,
+  current:currentValid?{lat:Number(current.latitude),lon:Number(current.longitude),speed:Number.isFinite(currentSpeed)&&currentSpeed>=0&&currentSpeed<=MAX_PLAUSIBLE_SPEED_MPS?currentSpeed:0,time:serverMillis(current.updatedAt)}:null,
   segments
  };
 };
@@ -106,12 +109,15 @@ export default function LiveLocationDashboard({vehicleRegistration='',warehouseG
  </ScrollView>;
 }
 const buildGpsEvents=rows=>{
- const points=[...(rows||[])].filter(p=>serverMillis(p.updatedAt)>0&&Number.isFinite(Number(p.latitude))&&Number.isFinite(Number(p.longitude))).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
+ const points=[...(rows||[])].filter(isValidGpsPoint).sort((a,b)=>serverMillis(a.updatedAt)-serverMillis(b.updatedAt));
  const classified=[];let previous=null,lastStable=false;
  for(const point of points){
   const t=serverMillis(point.updatedAt),gap=previous?t-serverMillis(previous.updatedAt):0,moved=previous?distanceMeters(previous,point):0;
-  const gpsSpeed=Math.max(0,Number(point.speed||0)*3.6);
-  const derivedSpeed=previous&&gap>0&&gap<=180000&&moved>=25?moved/gap*3600:0;
+  const reported=Number(point.speed),gpsSpeed=Number.isFinite(reported)&&reported>=0&&reported<=MAX_PLAUSIBLE_SPEED_MPS?reported*3.6:0;
+  const derivedMps=previous&&gap>0&&gap<=180000?moved/(gap/1000):0;
+  // A single implausible coordinate jump is not a real drive event.
+  if(previous&&gap>0&&gap<=180000&&derivedMps>MAX_PLAUSIBLE_SPEED_MPS){previous=point;continue;}
+  const derivedSpeed=derivedMps*3.6;
   const speed=Math.max(gpsSpeed,derivedSpeed);
   let moving=speed>=8||moved>=80;
   if(speed>5&&speed<8&&moved<80)moving=lastStable;
@@ -125,16 +131,13 @@ const buildGpsEvents=rows=>{
  }
  const events=[];
  for(const sample of classified){
-  const state=sample.moving,prev=events[events.length-1];
-  const gap=prev?sample.t-prev.endAt:Infinity;
+  const state=sample.moving,prev=events[events.length-1],gap=prev?sample.t-prev.endAt:Infinity;
   const continuous=prev&&gap>=0&&gap<=15*60*1000;
   const sameStop=prev&&!state&&!prev.moving&&gap>=0&&gap<=60*60*1000&&distanceMeters(prev.point,sample.point)<=150;
   if(prev&&prev.moving===state&&(continuous||sameStop)){
    prev.endAt=sample.t;prev.duration=prev.endAt-prev.startAt;prev.points.push(sample.point);prev.point=sample.point;
    prev.speedTotal+=sample.speed;prev.speedCount++;prev.averageSpeed=Math.round(prev.speedTotal/prev.speedCount);
-  }else{
-   events.push({moving:state,startAt:sample.t,endAt:sample.t,duration:0,points:[sample.point],point:sample.point,averageSpeed:Math.round(sample.speed),speedTotal:sample.speed,speedCount:1});
-  }
+  }else events.push({moving:state,startAt:sample.t,endAt:sample.t,duration:0,points:[sample.point],point:sample.point,averageSpeed:Math.round(sample.speed),speedTotal:sample.speed,speedCount:1});
  }
  return events;
 };
