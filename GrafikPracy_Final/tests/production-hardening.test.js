@@ -464,3 +464,26 @@ test('implausible GPS speeds are normalized before display and API persistence',
   assert.ok(dashboard.includes('normalizeGpsSpeedMps(selectedPoint.speed,MAX_PLAUSIBLE_SPEED_MPS)'));
   assert.ok(server.includes('rawSpeed>=0&&rawSpeed<=55?rawSpeed:null'));
 });
+
+
+test('offline GPS queue is durable-ready, deduplicated, ordered, bounded, and expires old samples', () => {
+  const now = Date.UTC(2026, 9, 14, 12, 0, 0);
+  const old = {sampleId:'old',observedAt:now-8*24*60*60*1000,latitude:51,longitude:16};
+  const later = {sampleId:'later',observedAt:now-1000,latitude:51.1,longitude:16.1};
+  const earlier = {sampleId:'earlier',observedAt:now-2000,latitude:51.2,longitude:16.2};
+  const result = gpsLifecycle.mergePendingGpsPoints([old,later],[later,earlier],now,10,7*24*60*60*1000);
+  assert.deepEqual(result.map(x=>x.sampleId),['earlier','later']);
+  assert.equal(gpsLifecycle.mergePendingGpsPoints([],Array.from({length:4},(_,i)=>({sampleId:String(i),observedAt:now-i,latitude:51,longitude:16})),now,2).length,2);
+  assert.equal(gpsLifecycle.mergePendingGpsPoints([], [{sampleId:'bad',observedAt:now+10*60*1000,latitude:51,longitude:16}], now).length,0);
+});
+
+test('GPS history uploads are idempotent and the pending queue is persisted before upload', () => {
+  const service = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const schema = fs.readFileSync(new URL('../../backend/schema.sql', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(service.indexOf('await writePendingGpsQueue(queue);') < service.indexOf('await flushPendingGpsQueue(deviceToken,cfg);'));
+  assert.ok(service.includes('LOCATION_PENDING_QUEUE_KEY'));
+  assert.ok(schema.includes('gps_history_sample_id_idx'));
+  assert.ok(server.includes('ON CONFLICT (sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
+  assert.ok(service.includes("Number(previous?.observedAt||0)>Number(payload.observedAt||0)"));
+});

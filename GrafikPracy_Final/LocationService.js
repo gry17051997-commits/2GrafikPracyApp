@@ -3,13 +3,17 @@ import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import {Platform, AppState} from 'react-native';
 import {API_BASE_URL, apiPostGps} from './apiClient';
-import {missingAssignmentAction} from './gpsLifecycle';
+import {missingAssignmentAction, mergePendingGpsPoints} from './gpsLifecycle';
 
 export const LOCATION_TASK_NAME='grafik-pracy-vehicle-location-v2';
 export const LOCATION_CONFIG_KEY='grafik-pracy-location-config-v2';
 export const LOCATION_CURRENT_KEY='grafik-pracy-location-current-v2';
 export const LOCATION_DEVICE_TOKEN_KEY='grafik-pracy-location-device-token-v1';
 export const LOCATION_DIAGNOSTICS_KEY='grafik-pracy-location-diagnostics-v1';
+export const LOCATION_PENDING_QUEUE_KEY='grafik-pracy-location-pending-v1';
+const MAX_PENDING_GPS_POINTS=1000;
+const MAX_PENDING_GPS_AGE_MS=7*24*60*60*1000;
+const MAX_PENDING_GPS_FLUSH_PER_PASS=20;
 const LOCATION_OPTIONS_VERSION=3;
 
 export const normalizeVehicleId=value=>String(value||'').trim().toUpperCase().replace(/[^A-Z0-9ĄĆĘŁŃÓŚŹŻ]+/gi,'_').slice(0,40)||'SLUZBOWY';
@@ -65,50 +69,28 @@ const LOCATION_OPTIONS={
 };
 
 let saveQueue=Promise.resolve();
-async function saveLocationInternal(location){
-  if(!location?.coords||!API_BASE_URL)return;
-  const cfg=await getConfig();
-  if(cfg.enabled!==true)return;
-  const deviceToken=await getLocationDeviceToken();
-  if(!deviceToken)return;
-  const c=location.coords,now=Date.now();
-  const payload={
-    latitude:Number(c.latitude),
-    longitude:Number(c.longitude),
-    accuracy:Number(c.accuracy||0),
-    altitude:Number(c.altitude||0),
-    speed:Number.isFinite(c.speed)?Number(c.speed):null,
-    heading:Number.isFinite(c.heading)?Number(c.heading):null,
-    observedAt:Number(location.timestamp||now)
-  };
-  await patchDiagnostics({lastUploadAttemptAt:Date.now(),lastUploadAttemptObservedAt:payload.observedAt,lastUploadAttemptError:null});
-  let result=null,lastError=null;
-  // Krótkie ponowienia chronią przed utratą pojedynczego pomiaru przy chwilowym
-  // zaniku sieci. Błąd API nigdy sam w sobie nie wyłącza usługi GPS.
-  for(let attempt=0;attempt<3;attempt++){
-    try{
-      result=await apiPostGps(payload,deviceToken);
-      lastError=null;
-      break;
-    }catch(error){
-      lastError=error;
-      if(attempt<2) await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));
-    }
-  }
-  if(!result){
-    const message=String(lastError?.message||lastError||'unknown');
-    await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now(),lastUploadAttemptError:message.slice(0,240)});
-    console.log('LOCATION_API_WRITE_ERROR_AFTER_RETRIES',message);
-    return;
-  }
+async function readPendingGpsQueue(){
   try{
-    await patchDiagnostics({lastUploadAt:Date.now(),lastUploadError:null,lastUploadErrorAt:null,lastUploadAttemptError:null,lastUploadSucceededObservedAt:payload.observedAt});
+    const raw=await AsyncStorage.getItem(LOCATION_PENDING_QUEUE_KEY);
+    const parsed=raw?JSON.parse(raw):[];
+    return Array.isArray(parsed)?parsed:[];
+  }catch{return [];}
+}
+async function writePendingGpsQueue(queue){
+  await AsyncStorage.setItem(LOCATION_PENDING_QUEUE_KEY,JSON.stringify(queue));
+  await patchDiagnostics({pendingUploadCount:queue.length,pendingUploadUpdatedAt:Date.now()});
+}
+async function saveCurrentLocationFromUploadedSample(payload,result,cfg){
+  try{
     const assignedVehicleId=normalizeVehicleId(result.vehicleId||result.registration||cfg.vehicleId);
+    let previous=null;
+    try{const raw=await AsyncStorage.getItem(LOCATION_CURRENT_KEY);previous=raw?JSON.parse(raw):null;}catch{}
+    // An older queued sample may arrive after a newer live point. Never move the local current position backwards.
+    if(Number(previous?.observedAt||0)>Number(payload.observedAt||0))return;
     const local={...payload,vehicleId:assignedVehicleId,registration:result.registration||cfg.registration||'',receivedAt:Date.now()};
-    let previous=null;try{const raw=await AsyncStorage.getItem(LOCATION_CURRENT_KEY);previous=raw?JSON.parse(raw):null;}catch{}
     const moved=previous?distanceMeters(previous,payload):Infinity;
     const historyAt=Number(previous?.historyAt||0);
-    local.historyAt=!previous||moved>=80||now-historyAt>=120000?now:historyAt;
+    local.historyAt=!previous||moved>=80||Date.now()-historyAt>=120000?Date.now():historyAt;
     await AsyncStorage.setItem(LOCATION_CURRENT_KEY,JSON.stringify(local));
     await AsyncStorage.setItem(LOCATION_CONFIG_KEY,JSON.stringify({...cfg,enabled:true,vehicleId:assignedVehicleId,registration:local.registration}));
   }catch(error){
@@ -116,6 +98,57 @@ async function saveLocationInternal(location){
     await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now()});
     console.log('LOCATION_LOCAL_SAVE_ERROR',message);
   }
+}
+async function flushPendingGpsQueue(deviceToken,cfg){
+  if(!deviceToken)return;
+  let queue=mergePendingGpsPoints(await readPendingGpsQueue(),[],Date.now(),MAX_PENDING_GPS_POINTS,MAX_PENDING_GPS_AGE_MS);
+  await writePendingGpsQueue(queue);
+  let uploaded=0;
+  while(queue.length&&uploaded<MAX_PENDING_GPS_FLUSH_PER_PASS){
+    const sample=queue[0];
+    await patchDiagnostics({lastUploadAttemptAt:Date.now(),lastUploadAttemptObservedAt:sample.observedAt,lastUploadAttemptError:null});
+    let result=null,lastError=null;
+    for(let attempt=0;attempt<3;attempt++){
+      try{result=await apiPostGps(sample,deviceToken);lastError=null;break;}
+      catch(error){lastError=error;if(attempt<2)await new Promise(resolve=>setTimeout(resolve,750*(attempt+1)));}
+    }
+    if(!result){
+      const message=String(lastError?.message||lastError||'unknown');
+      await patchDiagnostics({lastUploadError:message.slice(0,240),lastUploadErrorAt:Date.now(),lastUploadAttemptError:message.slice(0,240),pendingUploadCount:queue.length});
+      console.log('LOCATION_API_WRITE_ERROR_AFTER_RETRIES',message);
+      return;
+    }
+    queue=queue.slice(1);
+    await writePendingGpsQueue(queue);
+    await patchDiagnostics({lastUploadAt:Date.now(),lastUploadError:null,lastUploadErrorAt:null,lastUploadAttemptError:null,lastUploadSucceededObservedAt:sample.observedAt});
+    await saveCurrentLocationFromUploadedSample(sample,result,cfg);
+    uploaded++;
+  }
+}
+async function saveLocationInternal(location){
+  if(!location?.coords||!API_BASE_URL)return;
+  const cfg=await getConfig();
+  if(cfg.enabled!==true)return;
+  const c=location.coords,now=Date.now(),observedAt=Number(location.timestamp||now);
+  if(!Number.isFinite(Number(c.latitude))||!Number.isFinite(Number(c.longitude))||!Number.isFinite(observedAt))return;
+  const payload={
+    sampleId:String(Math.round(observedAt))+'-'+Number(c.latitude).toFixed(6)+'-'+Number(c.longitude).toFixed(6),
+    latitude:Number(c.latitude),
+    longitude:Number(c.longitude),
+    accuracy:Number.isFinite(Number(c.accuracy))?Number(c.accuracy):null,
+    altitude:Number.isFinite(Number(c.altitude))?Number(c.altitude):null,
+    speed:Number.isFinite(c.speed)?Number(c.speed):null,
+    heading:Number.isFinite(c.heading)?Number(c.heading):null,
+    observedAt
+  };
+  const queue=mergePendingGpsPoints(await readPendingGpsQueue(),[payload],now,MAX_PENDING_GPS_POINTS,MAX_PENDING_GPS_AGE_MS);
+  await writePendingGpsQueue(queue);
+  const deviceToken=await getLocationDeviceToken();
+  if(!deviceToken){
+    await patchDiagnostics({lastUploadError:'GPS_DEVICE_TOKEN_MISSING',lastUploadErrorAt:Date.now()});
+    return;
+  }
+  await flushPendingGpsQueue(deviceToken,cfg);
 }
 function saveLocation(location){const run=saveQueue.then(()=>saveLocationInternal(location));saveQueue=run.catch(()=>{});return run;}
 
