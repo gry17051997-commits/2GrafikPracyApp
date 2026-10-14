@@ -69,16 +69,18 @@ jobs:
       - name: Generate Android native project
         run: npx expo prebuild --platform android --no-install --non-interactive
 
-      - name: Build APK from the real application
+      - name: Build standalone release APK from the real application
         working-directory: GrafikPracy_Final/android
-        run: ./gradlew assembleDebug --no-daemon --console=plain --max-workers=2
+        run: ./gradlew assembleRelease --no-daemon --console=plain --max-workers=2
 
-      - name: Verify APK and embedded bundle
+      - name: Verify APK and embedded JavaScript bundle
         run: |
-          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          APK="android/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
           unzip -t "$APK" >/dev/null
-          unzip -l "$APK" | grep -E 'assets/.+\.hbc|assets/.+\.bundle|index.android.bundle'
+          unzip -Z1 "$APK" > "$RUNNER_TEMP/apk-entries.txt"
+          grep -Eq '^classes[0-9]*\\.dex$' "$RUNNER_TEMP/apk-entries.txt"
+          grep -Eq '(^|/)index\\.android\\.bundle$|^assets/.*\\.(hbc|bundle)$' "$RUNNER_TEMP/apk-entries.txt"
           sha256sum "$APK"
 
       - name: Enable KVM
@@ -101,7 +103,7 @@ jobs:
           emulator-boot-timeout: 600
           script: |
             set -eu
-            APK="$GITHUB_WORKSPACE/GrafikPracy_Final/android/app/build/outputs/apk/debug/app-debug.apk"
+            APK="$GITHUB_WORKSPACE/GrafikPracy_Final/android/app/build/outputs/apk/release/app-release.apk"
             adb wait-for-device
             adb install -r "$APK"
             adb shell pm grant pl.grafikpracy.app android.permission.ACCESS_COARSE_LOCATION || true
@@ -155,6 +157,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Grafik-Pracy-Test-APK
-          path: ${{ github.workspace }}/GrafikPracy_Final/android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ github.workspace }}/GrafikPracy_Final/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
