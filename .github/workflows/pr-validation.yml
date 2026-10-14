@@ -1,6 +1,6 @@
 name: PR Validation
 
-# APK build retriggered for test artifact generation.
+# The test APK is published only after the real-app emulator smoke test passes.
 
 on:
   pull_request:
@@ -67,19 +67,3 @@ jobs:
         run: |
           test -f android/gradlew
           test -f android/app/src/main/AndroidManifest.xml
-      - name: Build release APK
-        working-directory: GrafikPracy_Final/android
-        run: ./gradlew assembleRelease --no-daemon --console=plain --max-workers=2
-      - name: Verify APK
-        working-directory: GrafikPracy_Final
-        run: |
-          test -s android/app/build/outputs/apk/release/app-release.apk
-          unzip -t android/app/build/outputs/apk/release/app-release.apk >/dev/null
-          ls -lh android/app/build/outputs/apk/release/app-release.apk
-      - name: Upload verified APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Grafik-Pracy-Standalone-APK
-          path: GrafikPracy_Final/android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
