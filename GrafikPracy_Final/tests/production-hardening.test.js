@@ -520,6 +520,13 @@ test('initial admin bootstrap is private, environment-gated, and never overrides
   assert.ok(server.includes("SELECT id FROM users WHERE role='admin' LIMIT 1"));
   assert.ok(server.includes('await bootstrapAdminFromEnvironment();'));
   assert.ok(!server.includes("const role=Number(count.rows[0].n)===0?'admin':'employee'"));
+  const bootstrapStart=server.indexOf('async function bootstrapAdminFromEnvironment()');
+  const bootstrapEnd=server.indexOf('async function cleanupGpsHistory()',bootstrapStart);
+  const bootstrap=server.slice(bootstrapStart,bootstrapEnd);
+  assert.match(bootstrap,/SELECT id,password_hash,disabled FROM users WHERE lower\(email\)=lower\(\$1\)/);
+  assert.match(bootstrap,/verifyPassword\(password,existingUser\.rows\[0\]\.password_hash\)/);
+  assert.match(bootstrap,/ADMIN_BOOTSTRAP_EXISTING_ACCOUNT_MISMATCH/);
+  assert.doesNotMatch(bootstrap,/SET role='admin',person_key='',disabled=false,password_hash=/);
 });
 
 test('login errors distinguish invalid credentials from server and network failures', () => {
