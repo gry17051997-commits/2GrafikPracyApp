@@ -124,9 +124,7 @@ jobs:
             grep -Eiq 'ZALOGUJ SIĘ|E-mail|Hasło|Zaloguj się, aby korzystać ze wspólnego grafiku' "${{ github.workspace }}/runtime-window.xml"
             echo "REAL APP AUTHENTICATION UI FOUND"
             echo "=== APP FATAL ERRORS ==="
-            if grep -E 'FATAL EXCEPTION|Unable to load script|ReactNativeJS.*(Error|Exception)|Invariant Violation|TurboModuleRegistry.*could not be found' "${{ github.workspace }}/runtime-logcat.txt"; then
-              exit 1
-            fi
+            node -e 'const fs=require("fs"); const p="${{ github.workspace }}/runtime-logcat.txt"; const s=fs.readFileSync(p,"utf8"); const re=/FATAL EXCEPTION|Unable to load script|ReactNativeJS.*(Error|Exception)|Invariant Violation|TurboModuleRegistry.*could not be found/; if(re.test(s)){console.error(s.split("\\n").filter(x=>re.test(x)).join("\\n")); process.exit(1)} console.log("NO APP FATAL ERRORS FOUND")'
             # The embedded app must survive background/foreground transitions.
             adb shell input keyevent 3
             sleep 3
