@@ -452,3 +452,15 @@ test('fleet inventory and assignment endpoints require administrator authorizati
   assert.ok(server.includes("app.get('/api/vehicles',auth,admin,async("));
   assert.ok(server.includes("app.get('/api/assignments',auth,admin,async("));
 });
+
+
+test('implausible GPS speeds are normalized before display and API persistence', () => {
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(0), 0);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(12.5), 12.5);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(96.1), 0);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(-1), 0);
+  const dashboard = fs.readFileSync(new URL('../LiveLocationDashboard.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('normalizeGpsSpeedMps(selectedPoint.speed,MAX_PLAUSIBLE_SPEED_MPS)'));
+  assert.ok(server.includes('rawSpeed>=0&&rawSpeed<=55?rawSpeed:null'));
+});

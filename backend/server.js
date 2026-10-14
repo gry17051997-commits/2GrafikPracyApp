@@ -253,7 +253,9 @@ app.post('/api/gps',async(req,res)=>{
   const observed=new Date(Number.isFinite(Number(b.observedAt))?Number(b.observedAt):Date.now());
   const accuracy=Number.isFinite(Number(b.accuracy))?Number(b.accuracy):null;
   const altitude=Number.isFinite(Number(b.altitude))?Number(b.altitude):null;
-  const speed=Number.isFinite(Number(b.speed))?Number(b.speed):null;
+  const rawSpeed=Number(b.speed);
+  // Expo reports speed in m/s. Preserve the coordinate but discard physically implausible speed samples.
+  const speed=Number.isFinite(rawSpeed)&&rawSpeed>=0&&rawSpeed<=55?rawSpeed:null;
   const heading=Number.isFinite(Number(b.heading))?Number(b.heading):null;
   // Never let a delayed older GPS sample move the current position backwards.
   await q('INSERT INTO gps_current(vehicle_id,latitude,longitude,accuracy,altitude,speed,heading,observed_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT(vehicle_id) DO UPDATE SET latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,accuracy=EXCLUDED.accuracy,altitude=EXCLUDED.altitude,speed=EXCLUDED.speed,heading=EXCLUDED.heading,observed_at=EXCLUDED.observed_at,received_at=NOW() WHERE gps_current.observed_at <= EXCLUDED.observed_at',[v.id,lat,lon,accuracy,altitude,speed,heading,observed]);
