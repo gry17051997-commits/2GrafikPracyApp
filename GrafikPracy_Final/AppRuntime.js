@@ -25,7 +25,7 @@ import * as Clipboard from 'expo-clipboard';
 import {captureRef} from 'react-native-view-shot';
 import * as Location from 'expo-location';
 import LiveLocationDashboard from './LiveLocationDashboard';
-import {getVehicleLocationConfig, saveVehicleLocationAssignment, startVehicleLocationTracking, stopVehicleLocationTracking, ensureVehicleLocationTracking, normalizeVehicleId, getLocationDeviceToken, setLocationDeviceToken, getLocationDiagnostics, LOCATION_CONFIG_KEY} from './LocationService';
+import {getVehicleLocationConfig, saveVehicleLocationAssignment, startVehicleLocationTracking, stopVehicleLocationTracking, ensureVehicleLocationTracking, normalizeVehicleId, getLocationDeviceToken, setLocationDeviceToken, getLocationDiagnostics, getVehicleLocationRuntimeStatus, LOCATION_CONFIG_KEY} from './LocationService';
 import {CENTRAL_API_ENABLED, db} from './firebaseConfig';
 import {apiLogin,apiLogout,apiMe,api,collection,doc,setDoc,getDoc,onSnapshot,serverTimestamp,addDoc,query,where,updateDoc,deleteField,orderBy,limit,runTransaction} from './apiClient';
 import NowDashboard from './NowDashboard';
@@ -456,7 +456,8 @@ export default function App() {
     }
     if (local.enabled === true) {
       const result=await ensureVehicleLocationTracking();
-      setLocationTracking(result.ok===true);
+      const runtimeStatus=await getVehicleLocationRuntimeStatus();
+      setLocationTracking(runtimeStatus.trackingConfigured===true&&runtimeStatus.nativeTaskRunning===true);
     }
   };
 
@@ -468,7 +469,7 @@ export default function App() {
         const c=await getVehicleLocationConfig();
         if(!mounted)return;
         await syncLocatorGpsFromCentralAssignment(c.registration||c.vehicleId||'');
-        const diagnostics=await getLocationDiagnostics();
+        const diagnostics=await getVehicleLocationRuntimeStatus();
         if(mounted)setLocationDiagnostics(diagnostics);
       }catch(e){if(mounted)setLocationTracking(false);}
     };
@@ -2666,7 +2667,12 @@ const settings = (
       <View style={S.option}><View style={{flex:1}}>
         <Text style={S.optionText}>🛠️ Diagnostyka GPS w tle</Text>
         <Text style={S.muted}>Ostatnie uruchomienie zadania: {locationDiagnostics.lastTaskInvocationAt?new Date(locationDiagnostics.lastTaskInvocationAt).toLocaleString('pl-PL'):'brak danych'}</Text>
+        <Text style={S.muted}>Stan natywnego zadania: {locationDiagnostics.nativeTaskRunning===true?'uruchomione':locationDiagnostics.nativeTaskRunning===false?'zatrzymane':'nieznany'} • rejestracja: {locationDiagnostics.nativeTaskDefined===true?'OK':'brak'}</Text>
+        <Text style={S.muted}>Uprawnienia: lokalizacja {locationDiagnostics.foregroundPermission||'?'}, w tle {locationDiagnostics.backgroundPermission||'?'}, usługi lokalizacji {locationDiagnostics.locationServicesEnabled===true?'włączone':locationDiagnostics.locationServicesEnabled===false?'wyłączone':'?'}</Text>
         <Text style={S.muted}>Wynik zadania: {locationDiagnostics.lastTaskInvocationStatus||'brak danych'}{Number.isFinite(Number(locationDiagnostics.lastTaskLocationCount))?' • pomiary: '+locationDiagnostics.lastTaskLocationCount:''}</Text>
+        <Text style={S.muted}>Wiek ostatniego pomiaru: {Number.isFinite(locationDiagnostics.lastTaskAgeMs)?Math.round(locationDiagnostics.lastTaskAgeMs/1000)+' s':'brak pomiaru'}</Text>
+        <Text style={S.muted}>Wiek ostatniego zapisu serwera: {Number.isFinite(locationDiagnostics.lastUploadAgeMs)?Math.round(locationDiagnostics.lastUploadAgeMs/1000)+' s':'brak zapisu'}</Text>
+        {locationDiagnostics.runtimeStatusError&&<Text style={S.muted}>Błąd odczytu stanu Androida: {locationDiagnostics.runtimeStatusError}</Text>}
         <Text style={S.muted}>Ostatni pomiar lokalny: {locationDiagnostics.lastTaskAt?new Date(locationDiagnostics.lastTaskAt).toLocaleString('pl-PL'):'brak pomiaru zadania w tle'}</Text>
         <Text style={S.muted}>Ostatnia próba wysyłki: {locationDiagnostics.lastUploadAttemptAt?new Date(locationDiagnostics.lastUploadAttemptAt).toLocaleString('pl-PL'):'brak danych'}</Text>
         <Text style={S.muted}>Ostatni zapis do serwera: {locationDiagnostics.lastUploadAt?new Date(locationDiagnostics.lastUploadAt).toLocaleString('pl-PL'):'brak potwierdzonego zapisu'}</Text>
