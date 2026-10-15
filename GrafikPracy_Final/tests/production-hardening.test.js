@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import test from 'node:test';
+import gpsLifecycle from '../gpsLifecycle.js';
+const {missingAssignmentAction} = gpsLifecycle;
 import assert from 'node:assert/strict';
 import {
   canAssignPersonToDay,
@@ -10,7 +12,8 @@ import {
   isValidScheduleWeekMap,
   isValidScheduleConditions,
   serverTimestampMillis,
-  addHourEpoch
+  addHourEpoch,
+  getShiftEndEpoch
 } from '../scheduleEngine.js';
 
 test('24h disabled blocks a second shift for the same person', () => {
@@ -232,7 +235,7 @@ test('GPS tracking requires a central device assignment and sends positions thro
   assert.ok(service.includes("fetch(API_BASE_URL+'/gps/device'"));
 assert.ok(service.includes("if(!assignment?.vehicleId)return null;"));
   assert.ok(service.includes("if(!assignment?.vehicleId)return {ok:false,reason:'device-not-assigned'};"));
-  assert.match(service, /apiPostGps\(payload,deviceToken\)/);
+  assert.match(service, /apiPostGps\(sample,deviceToken\)/);
   assert.match(service, /normalizeVehicleId\(assignment\.vehicleId\)/);
 });
 
@@ -277,6 +280,33 @@ test('central API configuration is enabled and Firebase packages are absent', ()
   assert.doesNotMatch(lock, /"node_modules\/firebase"/);
 });
 
+test('public registration always creates a least-privilege employee account', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const start = server.indexOf("app.post('/api/auth/register'");
+  const end = server.indexOf("app.post('/api/auth/login'", start);
+  assert.ok(start >= 0 && end > start);
+  const route = server.slice(start, end);
+  assert.match(route, /const role='employee'/);
+  assert.doesNotMatch(route, /BOOTSTRAP_ADMIN_EMAIL|SELECT COUNT\(\*\)::int AS n FROM users|role='admin'/);
+});
+
+test('document store authorization denies unknown collection access by default', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const readStart = server.indexOf('function canStoreRead(');
+  const writeStart = server.indexOf('function canStoreWrite(', readStart);
+  const collectionStart = server.indexOf('function assertCollectionName(', writeStart);
+  const readBlock = server.slice(readStart, writeStart);
+  const writeBlock = server.slice(writeStart, collectionStart);
+  assert.match(readBlock, /return false;/);
+  assert.match(writeBlock, /return false;/);
+  assert.match(readBlock, /name==='chatMessages'\|\|name==='schedules'\|\|name==='settings'\|\|name==='warehouseZones'/);
+});
+
+test('release APK build has a safe fallback for the central API URL', () => {
+  const workflow = fs.readFileSync(new URL('../../.github/workflows/build-apk.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes("secrets.EXPO_PUBLIC_API_URL || 'https://grafik-pracy-api-fra.onrender.com'"));
+});
+
 test('central backend protects document writes with revision checks', () => {
   const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
   assert.match(server, /expectedRevision/);
@@ -302,7 +332,12 @@ test('dashboard GPS mini map keeps a stable WebView and updates the OSM embed wi
   assert.match(dashboard, /const miniMapHtml=/);
   assert.match(dashboard, /key="gps-mini-map"/);
   assert.match(dashboard, /window\.setGpsPoint=function\(lat,lon\)/);
+  assert.match(dashboard, /L\.map\('gpsMap'/);
+  assert.match(dashboard, /L\.tileLayer\('https:\/\/api\.maptiler\.com\/maps\/streets-v2/);
+  assert.match(dashboard, /process\.env\.EXPO_PUBLIC_MAPTILER_KEY/);
+  assert.match(dashboard, /Błąd kafelków MapTiler/);
   assert.match(dashboard, /injectJavaScript\('window\.setGpsPoint\('/);
+  assert.doesNotMatch(dashboard, /<iframe id="gpsMapFrame"/);
   assert.doesNotMatch(dashboard, /key=\{Math\.round\(Number\(location\.latitude\)\*10000\)/);
 });
 
@@ -347,4 +382,156 @@ test('central API client prefixes every endpoint with the backend /api mount', (
   assert.ok(client.includes("API_BASE_URL=API_ORIGIN ? API_ORIGIN+'/api' : ''"));
   assert.ok(client.includes("api('/auth/login'"));
   assert.ok(server.includes("app.post('/api/auth/login'"));
+});
+
+
+test('report alarm shift end is calculated from shift duration, not setMinutes overflow', () => {
+  const localDate = new Date(2026, 9, 14, 0, 0, 0, 0);
+  const morningStart = new Date(localDate);
+  morningStart.setHours(6, 0, 0, 0);
+  const morningEnd = new Date(getShiftEndEpoch(morningStart.getTime(), 6 * 60, 16 * 60));
+  assert.equal(morningEnd.getTime() - morningStart.getTime(), 10 * 60 * 60 * 1000);
+  assert.equal(morningEnd.getHours(), 16);
+
+  const nightStart = new Date(localDate);
+  nightStart.setHours(18, 0, 0, 0);
+  const nightEnd = new Date(getShiftEndEpoch(nightStart.getTime(), 18 * 60, 6 * 60));
+  assert.equal(nightEnd.getTime() - nightStart.getTime(), 12 * 60 * 60 * 1000);
+  assert.equal(nightEnd.getDate(), localDate.getDate() + 1);
+  assert.equal(nightEnd.getHours(), 6);
+});
+
+test('report alarm shift end rejects invalid minute values', () => {
+  assert.throws(() => getShiftEndEpoch(Date.now(), -1, 60), RangeError);
+  assert.throws(() => getShiftEndEpoch(Date.now(), 60, 1440), RangeError);
+});
+
+
+test('missing vehicle assignment pauses GPS without clearing the enabled intent', () => {
+  assert.equal(missingAssignmentAction(true), 'pause-preserve-enabled');
+  assert.equal(missingAssignmentAction(false), 'stay-disabled');
+  assert.equal(missingAssignmentAction(undefined), 'stay-disabled');
+});
+
+
+test('GPS assignment lookup has a finite timeout and does not treat network errors as unassignment', () => {
+  const source = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const start = source.indexOf('const getDeviceAssignment=async token=>');
+  const end = source.indexOf('\n};', start);
+  assert.ok(start >= 0 && end > start);
+  const block = source.slice(start, end);
+  assert.match(block, /new AbortController\(\)/);
+  assert.match(block, /setTimeout\(\(\)=>controller\.abort\(\),8000\)/);
+  assert.match(block, /clearTimeout\(timeoutId\)/);
+  assert.match(block, /GPS_ASSIGNMENT_NETWORK_ERROR/);
+  assert.match(block, /GPS_ASSIGNMENT_TIMEOUT/);
+  assert.match(block, /response\.status===401\|\|response\.status===404/);
+});
+
+
+test('GPS fleet and history endpoints restrict employee access to assigned vehicles', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const fleetStart = server.indexOf("app.get('/api/gps/vehicles',auth");
+  const fleetEnd = server.indexOf("\napp.get('/api/gps/:vehicleId/history'", fleetStart);
+  assert.ok(fleetStart >= 0 && fleetEnd > fleetStart);
+  const fleetRoute = server.slice(fleetStart, fleetEnd);
+  assert.match(fleetRoute, /req\.user\.role==='admin'\|\|req\.user\.role==='locator'/);
+  assert.match(fleetRoute, /WHERE a\.user_id=\$1 AND a\.active=true/);
+
+  const historyStart = server.indexOf("app.get('/api/gps/:vehicleId/history',auth");
+  const historyEnd = server.indexOf("\napp.get('/api/schedules/:weekId'", historyStart);
+  assert.ok(historyStart >= 0 && historyEnd > historyStart);
+  const historyRoute = server.slice(historyStart, historyEnd);
+  assert.match(historyRoute, /GPS_VEHICLE_FORBIDDEN/);
+  assert.match(historyRoute, /a\.user_id=\$1 AND a\.vehicle_id=\$2 AND a\.active=true/);
+});
+
+
+test('fleet inventory and assignment endpoints require administrator authorization', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(server.includes("app.get('/api/vehicles',auth,admin,async("));
+  assert.ok(server.includes("app.get('/api/assignments',auth,admin,async("));
+});
+
+
+test('implausible GPS speeds are normalized before display and API persistence', () => {
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(0), 0);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(12.5), 12.5);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(96.1), 0);
+  assert.equal(gpsLifecycle.normalizeGpsSpeedMps(-1), 0);
+  const dashboard = fs.readFileSync(new URL('../LiveLocationDashboard.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(dashboard.includes('normalizeGpsSpeedMps(selectedPoint.speed,MAX_PLAUSIBLE_SPEED_MPS)'));
+  assert.ok(server.includes('rawSpeed>=0&&rawSpeed<=55?rawSpeed:null'));
+});
+
+
+test('offline GPS queue is durable-ready, deduplicated, ordered, bounded, and expires old samples', () => {
+  const now = Date.UTC(2026, 9, 14, 12, 0, 0);
+  const old = {sampleId:'old',observedAt:now-8*24*60*60*1000,latitude:51,longitude:16};
+  const later = {sampleId:'later',observedAt:now-1000,latitude:51.1,longitude:16.1};
+  const earlier = {sampleId:'earlier',observedAt:now-2000,latitude:51.2,longitude:16.2};
+  const result = gpsLifecycle.mergePendingGpsPoints([old,later],[later,earlier],now,10,7*24*60*60*1000);
+  assert.deepEqual(result.map(x=>x.sampleId),['earlier','later']);
+  assert.equal(gpsLifecycle.mergePendingGpsPoints([],Array.from({length:4},(_,i)=>({sampleId:String(i),observedAt:now-i,latitude:51,longitude:16})),now,2).length,2);
+  assert.equal(gpsLifecycle.mergePendingGpsPoints([], [{sampleId:'bad',observedAt:now+10*60*1000,latitude:51,longitude:16}], now).length,0);
+});
+
+test('GPS history uploads are idempotent and the pending queue is persisted before upload', () => {
+  const service = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const schema = fs.readFileSync(new URL('../../backend/schema.sql', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(service.indexOf('await writePendingGpsQueue(queue);') < service.indexOf('await flushPendingGpsQueue(deviceToken,cfg);'));
+  assert.ok(service.includes('LOCATION_PENDING_QUEUE_KEY'));
+  assert.ok(schema.includes('gps_history_sample_id_idx'));
+  assert.ok(server.includes('ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
+  assert.ok(service.includes("Number(previous?.observedAt||0)>Number(payload.observedAt||0)"));
+});
+
+
+test('offline GPS samples cannot be assigned to a different vehicle after a reassignment', () => {
+  const service = fs.readFileSync(new URL('../LocationService.js', import.meta.url), 'utf8');
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(service.includes('assignedVehicleId:cfg.assignedVehicleServerId||null'));
+  assert.ok(service.includes("String(lastError?.message||lastError)==='GPS_ASSIGNMENT_CHANGED'"));
+  assert.ok(server.includes("if(b.assignedVehicleId&&String(b.assignedVehicleId)!==String(v.id))return res.status(409).json({error:'GPS_ASSIGNMENT_CHANGED'})"));
+  assert.ok(server.includes('ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING'));
+});
+
+
+test('proposal approval and rejection are performed by atomic central API transactions', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  const app = fs.readFileSync(new URL('../AppRuntime.js', import.meta.url), 'utf8');
+  assert.ok(server.includes("app.post('/api/proposals/:proposalId/approve',auth,admin,async"));
+  assert.ok(server.includes("app.post('/api/proposals/:proposalId/reject',auth,admin,async"));
+  assert.ok(server.includes("SELECT payload,revision FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE"));
+  assert.ok(server.includes("SELECT payload,revision FROM documents WHERE collection_name='schedules' AND doc_id=$1 FOR UPDATE"));
+  assert.ok(server.includes("await client.query('COMMIT')"));
+  assert.ok(app.includes("api('/proposals/'+encodeURIComponent(proposal.id)+'/approve'"));
+  assert.ok(app.includes("api('/proposals/'+encodeURIComponent(id)+'/reject'"));
+});
+
+
+test('initial admin bootstrap is private, environment-gated, and never overrides an existing administrator', () => {
+  const server = fs.readFileSync(new URL('../../backend/server.js', import.meta.url), 'utf8');
+  assert.ok(server.includes('async function bootstrapAdminFromEnvironment()'));
+  assert.ok(server.includes('ADMIN_BOOTSTRAP_EMAIL'));
+  assert.ok(server.includes('ADMIN_BOOTSTRAP_PASSWORD'));
+  assert.ok(server.includes("SELECT id FROM users WHERE role='admin' LIMIT 1"));
+  assert.ok(server.includes('await bootstrapAdminFromEnvironment();'));
+  assert.ok(!server.includes("const role=Number(count.rows[0].n)===0?'admin':'employee'"));
+  const bootstrapStart=server.indexOf('async function bootstrapAdminFromEnvironment()');
+  const bootstrapEnd=server.indexOf('async function cleanupGpsHistory()',bootstrapStart);
+  const bootstrap=server.slice(bootstrapStart,bootstrapEnd);
+  assert.match(bootstrap,/SELECT id,password_hash,disabled FROM users WHERE lower\(email\)=lower\(\$1\)/);
+  assert.match(bootstrap,/verifyPassword\(password,existingUser\.rows\[0\]\.password_hash\)/);
+  assert.match(bootstrap,/ADMIN_BOOTSTRAP_EXISTING_ACCOUNT_MISMATCH/);
+  assert.doesNotMatch(bootstrap,/SET role='admin',person_key='',disabled=false,password_hash=/);
+});
+
+test('login errors distinguish invalid credentials from server and network failures', () => {
+  const app = fs.readFileSync(new URL('../AppRuntime.js', import.meta.url), 'utf8');
+  assert.ok(app.includes('Nieprawidłowy e-mail/hasło albo konto jest wyłączone.'));
+  assert.ok(app.includes('Centralny serwer zgłosił błąd.'));
+  assert.ok(app.includes('Nie można połączyć się z centralnym serwerem.'));
 });

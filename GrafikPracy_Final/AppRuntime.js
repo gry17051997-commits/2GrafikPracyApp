@@ -25,12 +25,12 @@ import * as Clipboard from 'expo-clipboard';
 import {captureRef} from 'react-native-view-shot';
 import * as Location from 'expo-location';
 import LiveLocationDashboard from './LiveLocationDashboard';
-import {getVehicleLocationConfig, saveVehicleLocationAssignment, startVehicleLocationTracking, stopVehicleLocationTracking, ensureVehicleLocationTracking, normalizeVehicleId, getLocationDeviceToken, setLocationDeviceToken, getLocationDiagnostics, LOCATION_CONFIG_KEY} from './LocationService';
+import {getVehicleLocationConfig, saveVehicleLocationAssignment, startVehicleLocationTracking, stopVehicleLocationTracking, ensureVehicleLocationTracking, normalizeVehicleId, getLocationDeviceToken, setLocationDeviceToken, getLocationDiagnostics, getVehicleLocationRuntimeStatus, LOCATION_CONFIG_KEY} from './LocationService';
 import {CENTRAL_API_ENABLED, db} from './firebaseConfig';
 import {apiLogin,apiLogout,apiMe,api,collection,doc,setDoc,getDoc,onSnapshot,serverTimestamp,addDoc,query,where,updateDoc,deleteField,orderBy,limit,runTransaction} from './apiClient';
 import NowDashboard from './NowDashboard';
 import AdminUsersPanel from './AdminUsersPanel';
-import {canAssignPersonToDay, isValidScheduleConditions, isValidScheduleWeekMap, isValidWeekIdMap, maxAdditionalAssignments} from './scheduleEngine';
+import {canAssignPersonToDay, isValidScheduleConditions, isValidScheduleWeekMap, isValidWeekIdMap, maxAdditionalAssignments, getShiftEndEpoch} from './scheduleEngine';
 
 const KEY = 'grafik-pracy-v5';
 const LEGACY_KEY = 'grafik-pracy-v4';
@@ -456,7 +456,8 @@ export default function App() {
     }
     if (local.enabled === true) {
       const result=await ensureVehicleLocationTracking();
-      setLocationTracking(result.ok===true);
+      const runtimeStatus=await getVehicleLocationRuntimeStatus();
+      setLocationTracking(runtimeStatus.trackingConfigured===true&&runtimeStatus.nativeTaskRunning===true);
     }
   };
 
@@ -468,7 +469,7 @@ export default function App() {
         const c=await getVehicleLocationConfig();
         if(!mounted)return;
         await syncLocatorGpsFromCentralAssignment(c.registration||c.vehicleId||'');
-        const diagnostics=await getLocationDiagnostics();
+        const diagnostics=await getVehicleLocationRuntimeStatus();
         if(mounted)setLocationDiagnostics(diagnostics);
       }catch(e){if(mounted)setLocationTracking(false);}
     };
@@ -1232,12 +1233,10 @@ export default function App() {
             || times;
           const shiftTimes = weekTimes;
           const startMin = parseHM(si === 0 ? shiftTimes.s1 : shiftTimes.s2);
-          let endMin = parseHM(si === 0 ? shiftTimes.e1 : shiftTimes.e2);
-          if (endMin <= startMin) endMin += 24 * 60;
+          const endMin = parseHM(si === 0 ? shiftTimes.e1 : shiftTimes.e2);
           const shiftStart = new Date(shiftDate);
           shiftStart.setHours(Math.floor(startMin/60),startMin%60,0,0);
-          const shiftEnd = new Date(shiftStart);
-          shiftEnd.setMinutes(endMin);
+          const shiftEnd = new Date(getShiftEndEpoch(shiftStart.getTime(),startMin,endMin));
           const first = new Date(shiftStart);
           first.setMinutes(40,0,0);
           if (first <= shiftStart) first.setHours(first.getHours()+1);
@@ -1326,7 +1325,11 @@ export default function App() {
       setAuthPassword('');
       setCloudReady(true);
     }catch(e){
-      setCloudError(e?.code==='INVALID_CREDENTIALS'?'Nieprawidłowy e-mail lub hasło.':'Nie udało się zalogować do centralnego serwera.');
+      if(e?.code==='INVALID_CREDENTIALS')setCloudError('Nieprawidłowy e-mail/hasło albo konto jest wyłączone.');
+      else if(e?.status===403)setCloudError('Konto nie ma wymaganych uprawnień.');
+      else if(e?.status>=500)setCloudError('Centralny serwer zgłosił błąd. Spróbuj ponownie później.');
+      else if(String(e?.message||'').includes('EXPO_PUBLIC_API_URL'))setCloudError('Aplikacja nie ma skonfigurowanego adresu centralnego API.');
+      else setCloudError('Nie można połączyć się z centralnym serwerem. Sprawdź internet i spróbuj ponownie.');
     }finally{setAuthBusy(false);}
   };
 
@@ -1809,34 +1812,10 @@ export default function App() {
     }
     try {
       if(CENTRAL_API_ENABLED && db) {
-        const proposalRef=doc(db,'proposals',proposal.id);
-        const scheduleRef=doc(db,'schedules',proposalWeekKey);
-        const committedWeek=await runTransaction(db,async tx=>{
-          const proposalSnap=await tx.get(proposalRef);
-          if(!proposalSnap.exists() || proposalSnap.data()?.status !== 'pending') {
-            throw new Error('proposal-not-pending');
-          }
-          const scheduleSnap=await tx.get(scheduleRef);
-          if(!scheduleSnap.exists()) throw new Error('schedule-missing');
-          const scheduleData=scheduleSnap.data() || {};
-          const currentMap=scheduleData.shifts && typeof scheduleData.shifts === 'object'
-            ? scheduleData.shifts
-            : weekToShiftMap(scheduleData.week || [],proposalWeekKey);
-          const source=shiftMapToWeek(currentMap,proposalWeek,proposalWeekKey);
-          const x=source?.[fromDay]?.shifts?.[fromShift-1];
-          const y=source?.[toDay]?.shifts?.[toShift-1];
-          if(!x || !y || x.person!==expectedA || y.person!==expectedB || x.locked || y.locked) {
-            throw new Error('proposal-stale');
-          }
-          const next=cloneWeek(source);
-          const nx=next[fromDay].shifts[fromShift-1], ny=next[toDay].shifts[toShift-1];
-          const xp=nx.person; nx.person=ny.person; ny.person=xp; nx.manual=true; ny.manual=true;
-          const nextMap=weekToShiftMap(next,proposalWeekKey);
-          tx.update(scheduleRef,{shifts:nextMap,updatedAt:serverTimestamp(),updatedBy:cloudUser?.uid||null});
-          tx.update(proposalRef,{status:'approved',approvedAt:new Date().toISOString(),approvedBy:cloudUser?.uid||null});
-          return next;
-        });
+        const result=await api('/proposals/'+encodeURIComponent(proposal.id)+'/approve',{method:'POST'});
+        const committedWeek=shiftMapToWeek(result.schedule?.shifts,proposalWeek,proposalWeekKey);
         setWeeks(prev=>({...prev,[proposalWeekKey]:committedWeek}));
+        setProposals(prev=>prev.map(item=>item.id===proposal.id?{...item,status:'approved',approvedAt:result.proposal?.approvedAt}:item));
       } else {
         const source=weeks[proposalWeekKey];
         if(!source) throw new Error('schedule-missing');
@@ -1857,12 +1836,8 @@ export default function App() {
     if (readOnly) return;
     try {
       if(CENTRAL_API_ENABLED && db) {
-        const proposalRef=doc(db,'proposals',id);
-        await runTransaction(db,async tx=>{
-          const snap=await tx.get(proposalRef);
-          if(!snap.exists() || snap.data()?.status !== 'pending') throw new Error('proposal-not-pending');
-          tx.update(proposalRef,{status:'rejected',rejectedAt:new Date().toISOString(),rejectedBy:cloudUser?.uid||null});
-        });
+        await api('/proposals/'+encodeURIComponent(id)+'/reject',{method:'POST'});
+        setProposals(prev=>prev.map(item=>item.id===id?{...item,status:'rejected'}:item));
       } else {
         setProposals(p=>p.map(x=>x.id===id && x.status==='pending'?{...x,status:'rejected'}:x));
       }
@@ -2691,9 +2666,19 @@ const settings = (
       <Text style={S.helpLine}>Po aktywacji Android poprosi o dokładną lokalizację oraz lokalizację w tle. Wybierz „Zawsze zezwalaj”, jeśli system pokaże taką opcję.</Text>
       <View style={S.option}><View style={{flex:1}}>
         <Text style={S.optionText}>🛠️ Diagnostyka GPS w tle</Text>
+        <Text style={S.muted}>Ostatnie uruchomienie zadania: {locationDiagnostics.lastTaskInvocationAt?new Date(locationDiagnostics.lastTaskInvocationAt).toLocaleString('pl-PL'):'brak danych'}</Text>
+        <Text style={S.muted}>Stan natywnego zadania: {locationDiagnostics.nativeTaskRunning===true?'uruchomione':locationDiagnostics.nativeTaskRunning===false?'zatrzymane':'nieznany'} • rejestracja: {locationDiagnostics.nativeTaskDefined===true?'OK':'brak'}</Text>
+        <Text style={S.muted}>Uprawnienia: lokalizacja {locationDiagnostics.foregroundPermission||'?'}, w tle {locationDiagnostics.backgroundPermission||'?'}, usługi lokalizacji {locationDiagnostics.locationServicesEnabled===true?'włączone':locationDiagnostics.locationServicesEnabled===false?'wyłączone':'?'}</Text>
+        <Text style={S.muted}>Wynik zadania: {locationDiagnostics.lastTaskInvocationStatus||'brak danych'}{Number.isFinite(Number(locationDiagnostics.lastTaskLocationCount))?' • pomiary: '+locationDiagnostics.lastTaskLocationCount:''}</Text>
+        <Text style={S.muted}>Wiek ostatniego pomiaru: {Number.isFinite(locationDiagnostics.lastTaskAgeMs)?Math.round(locationDiagnostics.lastTaskAgeMs/1000)+' s':'brak pomiaru'}</Text>
+        <Text style={S.muted}>Wiek ostatniego zapisu serwera: {Number.isFinite(locationDiagnostics.lastUploadAgeMs)?Math.round(locationDiagnostics.lastUploadAgeMs/1000)+' s':'brak zapisu'}</Text>
+        {locationDiagnostics.runtimeStatusError&&<Text style={S.muted}>Błąd odczytu stanu Androida: {locationDiagnostics.runtimeStatusError}</Text>}
         <Text style={S.muted}>Ostatni pomiar lokalny: {locationDiagnostics.lastTaskAt?new Date(locationDiagnostics.lastTaskAt).toLocaleString('pl-PL'):'brak pomiaru zadania w tle'}</Text>
+        <Text style={S.muted}>Ostatnia próba wysyłki: {locationDiagnostics.lastUploadAttemptAt?new Date(locationDiagnostics.lastUploadAttemptAt).toLocaleString('pl-PL'):'brak danych'}</Text>
         <Text style={S.muted}>Ostatni zapis do serwera: {locationDiagnostics.lastUploadAt?new Date(locationDiagnostics.lastUploadAt).toLocaleString('pl-PL'):'brak potwierdzonego zapisu'}</Text>
+        <Text style={S.muted}>Punkty oczekujące na wysłanie: {Number(locationDiagnostics.pendingUploadCount||0)}</Text>
         {locationDiagnostics.lastTaskError&&<Text style={S.muted}>Błąd zadania: {locationDiagnostics.lastTaskError}</Text>}
+        {locationDiagnostics.lastTaskLocationProcessError&&<Text style={S.muted}>Błąd obsługi pomiaru: {locationDiagnostics.lastTaskLocationProcessError}</Text>}
         {locationDiagnostics.lastUploadError&&<Text style={S.muted}>Błąd wysyłania: {locationDiagnostics.lastUploadError}</Text>}
       </View></View>
       <Text style={S.section}>🏭 Kalibracja stref magazynów</Text>

@@ -19,7 +19,7 @@ jobs:
     env:
       EXPO_NO_DOCTOR: "1"
       CI: "1"
-      EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+      EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL || 'https://grafik-pracy-api-fra.onrender.com' }}
 
     defaults:
       run:
@@ -49,12 +49,6 @@ jobs:
         run: |
           test -n "$EXPO_PUBLIC_API_URL"
           echo "Central API URL configured."
-
-      - name: Apply deterministic build fixes
-        run: |
-          node scripts/fix-app-build.js
-          node scripts/fix-chat-build.js
-          node scripts/fix-rotation-switch.js
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --non-interactive

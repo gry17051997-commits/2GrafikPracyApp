@@ -55,7 +55,8 @@ function canStoreRead(name,user,payload={}){
   if(name==='audit')return user.role==='admin';
   if(name==='proposals')return user.role==='admin'||payload.fromUid===user.id;
   if(name==='whatsappReports')return user.role==='admin'||payload.uid===user.id;
-  return true;
+  if(name==='chatMessages'||name==='schedules'||name==='settings'||name==='warehouseZones')return true;
+  return false;
 }
 function canStoreWrite(name,user,payload={},existing=null){
   if(name==='audit')return false;
@@ -65,7 +66,7 @@ function canStoreWrite(name,user,payload={},existing=null){
   if(name==='chatMessages')return user.role==='admin'||(!existing&&payload.uid===user.id);
   if(name==='whatsappReports')return user.role==='admin'||(!existing&&payload.uid===user.id);
   if(name==='users')return user.role==='admin';
-  return true;
+  return false;
 }
 
 function assertCollectionName(v){
@@ -83,8 +84,9 @@ app.post('/api/auth/register',async(req,res)=>{
   const password=String(req.body?.password||'');
   const displayName=String(req.body?.displayName||email.split('@')[0]||'').trim();
   if(!validEmail(email)||password.length<6||password.length>128||displayName.length<2||displayName.length>100)return res.status(400).json({error:'INVALID_REGISTRATION'});
-  const count=await q('SELECT COUNT(*)::int AS n FROM users');
-  const role=Number(count.rows[0].n)===0?'admin':'employee';
+  // Public registration never grants privileged roles. Provision the first administrator
+  // through a trusted database/admin bootstrap operation, not an unauthenticated signup.
+  const role='employee';
   try{
     const uid=id();
     const r=await q('INSERT INTO users(id,email,password_hash,display_name,role) VALUES($1,$2,$3,$4,$5) RETURNING *',[uid,email,hashPassword(password),displayName,role]);
@@ -155,7 +157,7 @@ app.delete('/api/users/:uid',auth,admin,async(req,res)=>{
   res.json({ok:true});
 });
 
-app.get('/api/vehicles',auth,async(_req,res)=>{
+app.get('/api/vehicles',auth,admin,async(_req,res)=>{
   const r=await q('SELECT * FROM vehicles ORDER BY registration');
   res.json({vehicles:r.rows});
 });
@@ -200,7 +202,7 @@ app.delete('/api/phones/:id',auth,admin,async(req,res)=>{
   res.json({ok:true});
 });
 
-app.get('/api/assignments',auth,async(_req,res)=>{
+app.get('/api/assignments',auth,admin,async(_req,res)=>{
   const r=await q('SELECT a.*,v.registration,v.name AS vehicle_name,p.name AS phone_name,u.display_name AS user_name FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id JOIN phones p ON p.id=a.phone_id LEFT JOIN users u ON u.id=a.user_id WHERE a.active=true ORDER BY v.registration');
   res.json({assignments:r.rows});
 });
@@ -231,6 +233,73 @@ app.post('/api/assignments',auth,admin,async(req,res)=>{
   }finally{client.release();}
 });
 
+
+app.post('/api/proposals/:proposalId/approve',auth,admin,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const proposalResult=await client.query("SELECT payload,revision FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE",[String(req.params.proposalId)]);
+    if(!proposalResult.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'PROPOSAL_NOT_FOUND'});}
+    const proposal=proposalResult.rows[0].payload||{};
+    if(proposal.status!=='pending'){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_NOT_PENDING'});}
+    const weekKey=String(proposal.weekKey||'');
+    const match=weekKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(!match){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_WEEK'});}
+    const weekStart=new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3])));
+    if(Number.isNaN(weekStart.getTime())||weekStart.toISOString().slice(0,10)!==weekKey||weekStart.getUTCDay()!==1){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_WEEK'});}
+    const fromDay=Number(proposal.fromDay),toDay=Number(proposal.toDay),fromShift=Number(proposal.fromShift),toShift=Number(proposal.toShift);
+    if(!Number.isInteger(fromDay)||!Number.isInteger(toDay)||fromDay<0||fromDay>6||toDay<0||toDay>6||!Number.isInteger(fromShift)||!Number.isInteger(toShift)||fromShift<1||fromShift>2||toShift<1||toShift>2||(fromDay===toDay&&fromShift===toShift)){await client.query('ROLLBACK');return res.status(400).json({error:'INVALID_PROPOSAL_SHIFTS'});}
+    const localToday=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Warsaw',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const dateForOffset=offset=>{const d=new Date(weekStart);d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10);};
+    if(dateForOffset(fromDay)<localToday||dateForOffset(toDay)<localToday){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_DATE_PASSED'});}
+    const scheduleResult=await client.query("SELECT payload,revision FROM documents WHERE collection_name='schedules' AND doc_id=$1 FOR UPDATE",[weekKey]);
+    if(!scheduleResult.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'SCHEDULE_NOT_FOUND'});}
+    const schedule=scheduleResult.rows[0].payload||{};
+    const shifts=schedule.shifts&&typeof schedule.shifts==='object'&&!Array.isArray(schedule.shifts)?{...schedule.shifts}:{};
+    if(!Object.keys(shifts).length&&Array.isArray(schedule.week)){
+      schedule.week.forEach((day,di)=>(day?.shifts||[]).forEach((shift,si)=>{
+        shifts['shift_'+dateForOffset(di)+'_'+(si+1)]={...shift,id:shift.id||di+'-'+(si+1),shift:si+1,person:shift.person||null,warehouse:shift.warehouse||day.warehouse||''};
+      }));
+    }
+    const fromKey='shift_'+dateForOffset(fromDay)+'_'+fromShift,toKey='shift_'+dateForOffset(toDay)+'_'+toShift;
+    const from=shifts[fromKey],to=shifts[toKey];
+    const expectedFrom=proposal.fromExpectedPerson??proposal.fromPerson??null,expectedTo=proposal.toExpectedPerson??proposal.toPerson??null;
+    if(!from||!to||from.person!==expectedFrom||to.person!==expectedTo||from.locked===true||to.locked===true){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_STALE'});}
+    shifts[fromKey]={...from,person:to.person||null,manual:true};
+    shifts[toKey]={...to,person:from.person||null,manual:true};
+    const approvedAt=new Date().toISOString();
+    const nextSchedule={...schedule,weekId:weekKey,shifts,updatedAt:approvedAt,updatedBy:req.user.id};
+    const nextProposal={...proposal,status:'approved',approvedAt,approvedBy:req.user.id};
+    const updatedSchedule=await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='schedules' AND doc_id=$3 RETURNING revision",[JSON.stringify(nextSchedule),req.user.id,weekKey]);
+    await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='proposals' AND doc_id=$3",[JSON.stringify(nextProposal),req.user.id,String(req.params.proposalId)]);
+    await client.query('COMMIT');
+    res.json({ok:true,schedule:nextSchedule,revision:Number(updatedSchedule.rows[0]?.revision||0),proposal:nextProposal});
+  }catch(error){
+    try{await client.query('ROLLBACK');}catch{}
+    console.error('Proposal approval failed',error);
+    res.status(500).json({error:'PROPOSAL_APPROVAL_FAILED'});
+  }finally{client.release();}
+});
+app.post('/api/proposals/:proposalId/reject',auth,admin,async(req,res)=>{
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const found=await client.query("SELECT payload FROM documents WHERE collection_name='proposals' AND doc_id=$1 FOR UPDATE",[String(req.params.proposalId)]);
+    if(!found.rows[0]){await client.query('ROLLBACK');return res.status(404).json({error:'PROPOSAL_NOT_FOUND'});}
+    const proposal=found.rows[0].payload||{};
+    if(proposal.status!=='pending'){await client.query('ROLLBACK');return res.status(409).json({error:'PROPOSAL_NOT_PENDING'});}
+    const rejectedAt=new Date().toISOString();
+    const next={...proposal,status:'rejected',rejectedAt,rejectedBy:req.user.id};
+    await client.query("UPDATE documents SET payload=$1::jsonb,revision=revision+1,updated_at=NOW(),updated_by=$2 WHERE collection_name='proposals' AND doc_id=$3",[JSON.stringify(next),req.user.id,String(req.params.proposalId)]);
+    await client.query('COMMIT');
+    res.json({ok:true,proposal:next});
+  }catch(error){
+    try{await client.query('ROLLBACK');}catch{}
+    console.error('Proposal rejection failed',error);
+    res.status(500).json({error:'PROPOSAL_REJECTION_FAILED'});
+  }finally{client.release();}
+});
+
 async function deviceVehicle(token){
   const r=await q('SELECT v.* FROM phones p JOIN assignments a ON a.phone_id=p.id AND a.active=true JOIN vehicles v ON v.id=a.vehicle_id WHERE p.device_token_hash=$1 AND p.active=true AND v.active=true',[hashToken(token)]);
   return r.rows[0];
@@ -251,10 +320,15 @@ app.post('/api/gps',async(req,res)=>{
   const observed=new Date(Number.isFinite(Number(b.observedAt))?Number(b.observedAt):Date.now());
   const accuracy=Number.isFinite(Number(b.accuracy))?Number(b.accuracy):null;
   const altitude=Number.isFinite(Number(b.altitude))?Number(b.altitude):null;
-  const speed=Number.isFinite(Number(b.speed))?Number(b.speed):null;
+  const rawSpeed=Number(b.speed);
+  // Expo reports speed in m/s. Preserve the coordinate but discard physically implausible speed samples.
+  const speed=Number.isFinite(rawSpeed)&&rawSpeed>=0&&rawSpeed<=55?rawSpeed:null;
   const heading=Number.isFinite(Number(b.heading))?Number(b.heading):null;
-  await q('INSERT INTO gps_current(vehicle_id,latitude,longitude,accuracy,altitude,speed,heading,observed_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT(vehicle_id) DO UPDATE SET latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,accuracy=EXCLUDED.accuracy,altitude=EXCLUDED.altitude,speed=EXCLUDED.speed,heading=EXCLUDED.heading,observed_at=EXCLUDED.observed_at,received_at=NOW()',[v.id,lat,lon,accuracy,altitude,speed,heading,observed]);
-  await q('INSERT INTO gps_history(vehicle_id,latitude,longitude,accuracy,altitude,speed,heading,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[v.id,lat,lon,accuracy,altitude,speed,heading,observed]);
+  const sampleId=String(b.sampleId||'').trim().slice(0,200)||null;
+  if(b.assignedVehicleId&&String(b.assignedVehicleId)!==String(v.id))return res.status(409).json({error:'GPS_ASSIGNMENT_CHANGED'});
+  // Never let a delayed older GPS sample move the current position backwards.
+  await q('INSERT INTO gps_current(vehicle_id,latitude,longitude,accuracy,altitude,speed,heading,observed_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT(vehicle_id) DO UPDATE SET latitude=EXCLUDED.latitude,longitude=EXCLUDED.longitude,accuracy=EXCLUDED.accuracy,altitude=EXCLUDED.altitude,speed=EXCLUDED.speed,heading=EXCLUDED.heading,observed_at=EXCLUDED.observed_at,received_at=NOW() WHERE gps_current.observed_at <= EXCLUDED.observed_at',[v.id,lat,lon,accuracy,altitude,speed,heading,observed]);
+  await q('INSERT INTO gps_history(vehicle_id,latitude,longitude,accuracy,altitude,speed,heading,observed_at,sample_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (vehicle_id,sample_id) WHERE sample_id IS NOT NULL DO NOTHING',[v.id,lat,lon,accuracy,altitude,speed,heading,observed,sampleId]);
   await q('UPDATE phones p SET last_seen_at=NOW(),updated_at=NOW() FROM assignments a WHERE a.phone_id=p.id AND a.vehicle_id=$1 AND a.active=true',[v.id]);
   res.json({ok:true,vehicleId:v.id,registration:v.registration,observedAt:observed.toISOString()});
 });
@@ -262,11 +336,22 @@ app.get('/api/gps/mine',auth,async(req,res)=>{
   const r=await q('SELECT v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id AND v.active=true LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE a.user_id=$1 AND a.active=true ORDER BY a.updated_at DESC LIMIT 1',[req.user.id]);
   res.json({vehicle:r.rows[0]||null});
 });
-app.get('/api/gps/vehicles',auth,async(_req,res)=>{
-  const r=await q('SELECT v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at FROM vehicles v LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE v.active=true ORDER BY v.registration');
+app.get('/api/gps/vehicles',auth,async(req,res)=>{
+  const columns='v.id,v.registration,v.name,g.latitude,g.longitude,g.accuracy,g.altitude,g.speed,g.heading,g.observed_at,g.received_at';
+  let r;
+  if(req.user.role==='admin'||req.user.role==='locator'){
+    r=await q('SELECT '+columns+' FROM vehicles v LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE v.active=true ORDER BY v.registration');
+  }else{
+    // Kierowca może odczytać wyłącznie pojazd aktualnie przypisany do jego konta.
+    r=await q('SELECT '+columns+' FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id AND v.active=true LEFT JOIN gps_current g ON g.vehicle_id=v.id WHERE a.user_id=$1 AND a.active=true ORDER BY a.updated_at DESC LIMIT 1',[req.user.id]);
+  }
   res.json({vehicles:r.rows});
 });
 app.get('/api/gps/:vehicleId/history',auth,async(req,res)=>{
+  if(req.user.role!=='admin'&&req.user.role!=='locator'){
+    const allowed=await q('SELECT 1 FROM assignments a JOIN vehicles v ON v.id=a.vehicle_id WHERE a.user_id=$1 AND a.vehicle_id=$2 AND a.active=true AND v.active=true LIMIT 1',[req.user.id,req.params.vehicleId]);
+    if(!allowed.rows[0])return res.status(403).json({error:'GPS_VEHICLE_FORBIDDEN'});
+  }
   const r=await q("SELECT latitude,longitude,accuracy,altitude,speed,heading,observed_at,received_at FROM gps_history WHERE vehicle_id=$1 AND observed_at>=NOW()-INTERVAL '7 days' ORDER BY observed_at DESC LIMIT 5000",[req.params.vehicleId]);
   res.json({history:r.rows});
 });
@@ -368,6 +453,29 @@ app.use((err,_req,res,_next)=>{
   res.status(500).json({error:'INTERNAL_SERVER_ERROR'});
 });
 
+
+async function bootstrapAdminFromEnvironment(){
+  const email=String(process.env.ADMIN_BOOTSTRAP_EMAIL||'').trim().toLowerCase();
+  const password=String(process.env.ADMIN_BOOTSTRAP_PASSWORD||'');
+  if(!email&&!password)return false;
+  if(!validEmail(email)||password.length<12)throw new Error('ADMIN_BOOTSTRAP_CONFIGURATION_INVALID');
+  const existingAdmin=await q("SELECT id FROM users WHERE role='admin' LIMIT 1");
+  if(existingAdmin.rows[0])return false;
+  const existingUser=await q('SELECT id,password_hash,disabled FROM users WHERE lower(email)=lower($1) LIMIT 1',[email]);
+  if(existingUser.rows[0]){
+    // Never silently reset credentials or reactivate a disabled account during service startup.
+    // Existing users can be promoted only when the supplied bootstrap password already matches.
+    if(existingUser.rows[0].disabled||!verifyPassword(password,existingUser.rows[0].password_hash)){
+      throw new Error('ADMIN_BOOTSTRAP_EXISTING_ACCOUNT_MISMATCH');
+    }
+    await q("UPDATE users SET role='admin',person_key='',updated_at=NOW() WHERE id=$1",[existingUser.rows[0].id]);
+  }else{
+    await q("INSERT INTO users(id,email,password_hash,display_name,person_key,role,disabled) VALUES($1,$2,$3,$4,'','admin',false)",[id(),email,hashPassword(password),email.split('@')[0]||'Administrator']);
+  }
+  console.log('Initial administrator provisioned from ADMIN_BOOTSTRAP_EMAIL.');
+  return true;
+}
+
 async function cleanupGpsHistory(){
   try{const result=await q("DELETE FROM gps_history WHERE observed_at < NOW()-INTERVAL '7 days'");console.log('GPS history cleanup',result.rowCount);}
   catch(error){console.error('GPS history cleanup failed',error);}
@@ -379,6 +487,7 @@ async function bootstrap(){
   if(process.env.DATABASE_URL){
     const schema=await readFile(new URL('./schema.sql',import.meta.url),'utf8');
     for(const statement of schema.split(';').map(x=>x.trim()).filter(Boolean))await q(statement);
+    await bootstrapAdminFromEnvironment();
     await cleanupGpsHistory();
   }
   app.listen(PORT,()=>console.log('Grafik Pracy central API listening on '+PORT));
