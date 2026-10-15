@@ -274,6 +274,41 @@ export async function ensureVehicleLocationTracking(){
   return {ok:true,restarted,vehicleId:assignment.vehicleId,registration:assignment.registration||''};
 }
 
+export async function getVehicleLocationRuntimeStatus(){
+  const checkedAt=Date.now();
+  const cfg=await getConfig();
+  const diagnostics=await getLocationDiagnostics();
+  let taskDefined=false,taskRunning=false,foregroundPermission='unknown',backgroundPermission='unknown',locationServicesEnabled=null,statusError=null;
+  try{
+    taskDefined=Platform.OS!=='web'&&TaskManager.isTaskDefined(LOCATION_TASK_NAME);
+    if(Platform.OS!=='web'){
+      taskRunning=await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
+      const fg=await Location.getForegroundPermissionsAsync();
+      const bg=await Location.getBackgroundPermissionsAsync();
+      foregroundPermission=fg.status;
+      backgroundPermission=bg.status;
+      locationServicesEnabled=await Location.hasServicesEnabledAsync();
+    }
+  }catch(error){
+    statusError=String(error?.message||error||'unknown').slice(0,240);
+  }
+  const lastTaskAt=Number(diagnostics.lastTaskAt||0);
+  const lastUploadAt=Number(diagnostics.lastUploadAt||0);
+  return {
+    ...diagnostics,
+    runtimeCheckedAt:checkedAt,
+    trackingConfigured:cfg.enabled===true,
+    nativeTaskDefined:taskDefined,
+    nativeTaskRunning:taskRunning,
+    foregroundPermission,
+    backgroundPermission,
+    locationServicesEnabled,
+    lastTaskAgeMs:lastTaskAt?Math.max(0,checkedAt-lastTaskAt):null,
+    lastUploadAgeMs:lastUploadAt?Math.max(0,checkedAt-lastUploadAt):null,
+    runtimeStatusError:statusError
+  };
+}
+
 export async function getVehicleLocationConfig(){
   const cfg=await getConfig();
   const token=await getLocationDeviceToken();
