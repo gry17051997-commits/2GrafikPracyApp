@@ -75,9 +75,9 @@ async function saveLocationInternal(location){
   };
   let result=null,lastError=null;
   const readPendingQueue=async()=>{
-    try{const raw=await AsyncStorage.getItem(LOCATION_PENDING_QUEUE_KEY);const parsed=raw?JSON.parse(raw):[];return Array.isArray(parsed)?parsed.filter(x=>x&&x.payload&&x.token).slice(-500):[];}catch{return[];}
+    try{const raw=await AsyncStorage.getItem(LOCATION_PENDING_QUEUE_KEY);const parsed=raw?JSON.parse(raw):[];return Array.isArray(parsed)?parsed.filter(x=>x&&x.payload&&x.token).slice(0,500):[];}catch{return[];}
   };
-  const writePendingQueue=async queue=>AsyncStorage.setItem(LOCATION_PENDING_QUEUE_KEY,JSON.stringify(queue.slice(-500)));
+  const writePendingQueue=async queue=>AsyncStorage.setItem(LOCATION_PENDING_QUEUE_KEY,JSON.stringify(queue.slice(0,500)));
   const uploadWithRetries=async(item)=>{
     let failure=null;
     for(let attempt=0;attempt<3;attempt++){
