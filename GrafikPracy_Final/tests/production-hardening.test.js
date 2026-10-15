@@ -348,3 +348,16 @@ test('central API client prefixes every endpoint with the backend /api mount', (
   assert.ok(client.includes("api('/auth/login'"));
   assert.ok(server.includes("app.post('/api/auth/login'"));
 });
+
+
+test('GPS upload failures are persisted in a bounded offline queue and retried FIFO', async () => {
+  const fs = await import('node:fs/promises');
+  const service = await fs.readFile(new URL('../LocationService.js', import.meta.url), 'utf8');
+  assert.match(service, /LOCATION_PENDING_QUEUE_KEY/);
+  assert.match(service, /AsyncStorage\.setItem\(LOCATION_PENDING_QUEUE_KEY,JSON\.stringify/);
+  assert.match(service, /while\(pending\.length\)/);
+  assert.match(service, /pending\.shift\(\)/);
+  assert.match(service, /LOCATION_PENDING_QUEUE_RETRY_FAILED/);
+  assert.match(service, /LOCATION_API_WRITE_ERROR_QUEUED/);
+  assert.match(service, /pendingGpsCount/);
+});
